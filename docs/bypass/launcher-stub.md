@@ -23,19 +23,26 @@
 // 声明标准字符串指针类型
 typedef int (*UnityMain2_t)(HINSTANCE, HINSTANCE, LPSTR, int);
 
+// 只补位不覆盖（Fallback-only）：优先保留前端自定义设置
+static void set_env_if_missing(const char *name, const char *val) {
+    if (GetEnvironmentVariableA(name, NULL, 0) == 0) {
+        SetEnvironmentVariableA(name, val);
+    }
+}
+
 void WinMainCRTStartup(void) {
     // 锚定工作目录至当前程序所在目录
     SetCurrentDirectoryW(L".");
 
-    // 动态注入环境参数（保稳定、控开销、提准度，零 CRT 依赖）
-    SetEnvironmentVariableA("BOX64_DYNAREC_BIGBLOCK", "1");
-    SetEnvironmentVariableA("BOX64_DYNAREC_SAFEFLAGS", "1");
-    SetEnvironmentVariableA("BOX64_DYNAREC_ALIGNED_ATOMICS", "1");
-    SetEnvironmentVariableA("BOX64_DYNAREC_STRONGMEM", "1");
-    SetEnvironmentVariableA("DXVK_ASYNC", "1");
-    SetEnvironmentVariableA("MESA_SHADER_CACHE", "1");
+    // 动态注入环境参数（只补位不覆盖，保稳定、控开销、提准度）
+    set_env_if_missing("BOX64_DYNAREC_BIGBLOCK", "1");
+    set_env_if_missing("BOX64_DYNAREC_SAFEFLAGS", "1");
+    set_env_if_missing("BOX64_DYNAREC_ALIGNED_ATOMICS", "1");
+    set_env_if_missing("BOX64_DYNAREC_STRONGMEM", "1");
+    set_env_if_missing("DXVK_ASYNC", "1");
+    set_env_if_missing("MESA_SHADER_CACHE", "1");
 
-    // 绝对持久化：动态解析当前路径并绑定 shader_cache 专属目录
+    // 绝对持久化：动态解析当前路径并绑定专属目录，绝不写死盘符
     char cache_dir[MAX_PATH];
     DWORD len = GetCurrentDirectoryA(MAX_PATH, cache_dir);
     if (len > 0 && len + 14 < MAX_PATH) {
@@ -47,8 +54,8 @@ void WinMainCRTStartup(void) {
             cache_dir[len + i] = sub[i];
         }
         CreateDirectoryA(cache_dir, NULL);
-        SetEnvironmentVariableA("MESA_SHADER_CACHE_DIR", cache_dir);
-        SetEnvironmentVariableA("DXVK_STATE_CACHE_PATH", cache_dir);
+        set_env_if_missing("MESA_SHADER_CACHE_DIR", cache_dir);
+        set_env_if_missing("DXVK_STATE_CACHE_PATH", cache_dir);
     }
 
     // 动态装载官方无壳 Unity 引擎核心

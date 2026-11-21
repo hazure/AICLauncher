@@ -2,24 +2,31 @@
 
 typedef int (*UnityMain2_t)(HINSTANCE, HINSTANCE, LPSTR, int);
 
+/* 只补位不覆盖（Fallback-only）：优先尊重玩家在 Winlator 前端设置的环境变量 */
+static void set_env_if_missing(const char *name, const char *val) {
+    if (GetEnvironmentVariableA(name, NULL, 0) == 0) {
+        SetEnvironmentVariableA(name, val);
+    }
+}
+
 void WinMainCRTStartup(void) {
     SetCurrentDirectoryW(L".");
 
-    /* Box64: 保稳定、控开销、提准度环境参数注入 */
+    /* Box64: 保稳定、控开销、提准度环境参数（只补位，不覆盖前端配置） */
     /* 保守基本块生成，避免激进重编译导致缓存失效与 CPU 尖峰开销 */
-    SetEnvironmentVariableA("BOX64_DYNAREC_BIGBLOCK", "1");
+    set_env_if_missing("BOX64_DYNAREC_BIGBLOCK", "1");
     /* 优化状态标志寄存器模拟，兼顾指令安全性与分支效率 */
-    SetEnvironmentVariableA("BOX64_DYNAREC_SAFEFLAGS", "1");
+    set_env_if_missing("BOX64_DYNAREC_SAFEFLAGS", "1");
     /* 强制多线程原子操作内存对齐，避免 Unity 多线程锁竞争异常 */
-    SetEnvironmentVariableA("BOX64_DYNAREC_ALIGNED_ATOMICS", "1");
+    set_env_if_missing("BOX64_DYNAREC_ALIGNED_ATOMICS", "1");
     /* 模拟强内存模型（TSO），在 ARM 弱内存序硬件下保障内存屏障与防死锁 */
-    SetEnvironmentVariableA("BOX64_DYNAREC_STRONGMEM", "1");
+    set_env_if_missing("BOX64_DYNAREC_STRONGMEM", "1");
 
-    /* DXVK & Mesa: 消除图形管线编译与着色器重构开销 */
-    SetEnvironmentVariableA("DXVK_ASYNC", "1");
-    SetEnvironmentVariableA("MESA_SHADER_CACHE", "1");
+    /* DXVK & Mesa: 消除图形管线编译与着色器重构开销（只补位，不覆盖前端配置） */
+    set_env_if_missing("DXVK_ASYNC", "1");
+    set_env_if_missing("MESA_SHADER_CACHE", "1");
 
-    /* 绝对持久化：动态解析当前路径并绑定 shader_cache 专属目录，杜绝冷启动重复编译阻塞 */
+    /* 绝对持久化：动态解析当前路径并拼接专属目录，绝不硬编码任何盘符或挂载点 */
     char cache_dir[MAX_PATH];
     DWORD len = GetCurrentDirectoryA(MAX_PATH, cache_dir);
     if (len > 0 && len + 14 < MAX_PATH) {
@@ -31,8 +38,8 @@ void WinMainCRTStartup(void) {
             cache_dir[len + i] = sub[i];
         }
         CreateDirectoryA(cache_dir, NULL);
-        SetEnvironmentVariableA("MESA_SHADER_CACHE_DIR", cache_dir);
-        SetEnvironmentVariableA("DXVK_STATE_CACHE_PATH", cache_dir);
+        set_env_if_missing("MESA_SHADER_CACHE_DIR", cache_dir);
+        set_env_if_missing("DXVK_STATE_CACHE_PATH", cache_dir);
     }
 
     HMODULE hUnity = LoadLibraryW(L"UnityPlayer.dll");
