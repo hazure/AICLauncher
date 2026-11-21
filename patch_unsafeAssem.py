@@ -15,16 +15,9 @@ import os
 import sys
 import shutil
 
-TARGET_SENS_OFF = 0x13e1d0
-TARGET_SP_OFF   = 0x13e1da
 TARGET_AWK_OFF  = 0xf9d53
 
-ORIG_SENS_BYTES = bytes.fromhex("267e2a1e000416fe022a")
-ORIG_SP_BYTES   = bytes.fromhex("267e2a1e000417fe022a")
 ORIG_AWK_BYTES  = bytes.fromhex("062d1672fee3007028650a000a02288900000a28af01000a2a")
-
-PATCH_SENS_BYTES = bytes.fromhex("26162a00000000000000")
-PATCH_SP_BYTES   = bytes.fromhex("26162a00000000000000")
 PATCH_AWK_BYTES  = bytes.fromhex("2b17" + "00" * 23)
 
 def resolve_target_dll():
@@ -73,20 +66,12 @@ def patch_file(dll_path):
         data = bytearray(f.read())
 
     # 1. Validation
-    sens_actual = data[TARGET_SENS_OFF:TARGET_SENS_OFF + len(ORIG_SENS_BYTES)]
-    sp_actual   = data[TARGET_SP_OFF:TARGET_SP_OFF + len(ORIG_SP_BYTES)]
-    awk_actual  = data[TARGET_AWK_OFF:TARGET_AWK_OFF + len(ORIG_AWK_BYTES)]
+    awk_actual = data[TARGET_AWK_OFF:TARGET_AWK_OFF + len(ORIG_AWK_BYTES)]
 
-    if sens_actual == PATCH_SENS_BYTES and awk_actual == PATCH_AWK_BYTES:
+    if awk_actual == PATCH_AWK_BYTES:
         print("Notice: This DLL has already been patched.")
         return True
 
-    if sens_actual != ORIG_SENS_BYTES:
-        print(f"Error: get_SENSITIVE signature mismatch at 0x{TARGET_SENS_OFF:X}")
-        return False
-    if sp_actual != ORIG_SP_BYTES:
-        print(f"Error: get_SP_SENSITIVE signature mismatch at 0x{TARGET_SP_OFF:X}")
-        return False
     if awk_actual != ORIG_AWK_BYTES:
         print(f"Error: IN::Awake signature mismatch at 0x{TARGET_AWK_OFF:X}")
         return False
@@ -97,10 +82,8 @@ def patch_file(dll_path):
         shutil.copy2(dll_path, bak_path)
         print(f"Backup created: {bak_path}")
 
-    # 3. Apply patches
-    data[TARGET_SENS_OFF:TARGET_SENS_OFF + len(PATCH_SENS_BYTES)] = PATCH_SENS_BYTES
-    data[TARGET_SP_OFF:TARGET_SP_OFF + len(PATCH_SP_BYTES)]       = PATCH_SP_BYTES
-    data[TARGET_AWK_OFF:TARGET_AWK_OFF + len(PATCH_AWK_BYTES)]    = PATCH_AWK_BYTES
+    # 3. Apply patch
+    data[TARGET_AWK_OFF:TARGET_AWK_OFF + len(PATCH_AWK_BYTES)] = PATCH_AWK_BYTES
 
     with open(dll_path, "wb") as f:
         f.write(data)
