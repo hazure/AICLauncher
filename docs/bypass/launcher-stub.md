@@ -30,8 +30,26 @@ void WinMainCRTStartup(void) {
     // 动态注入性能与转译优化环境变量（零 CRT 依赖）
     SetEnvironmentVariableA("BOX64_DYNAREC_BIGBLOCK", "2");
     SetEnvironmentVariableA("BOX64_DYNAREC_SAFEFLAGS", "1");
+    SetEnvironmentVariableA("BOX64_DYNAREC_ALIGNED_ATOMICS", "1");
+    SetEnvironmentVariableA("BOX64_DYNAREC_STRONGMEM", "1");
     SetEnvironmentVariableA("DXVK_ASYNC", "1");
     SetEnvironmentVariableA("MESA_SHADER_CACHE", "1");
+
+    // 绝对持久化：动态解析当前路径并绑定 shader_cache 专属目录
+    char cache_dir[MAX_PATH];
+    DWORD len = GetCurrentDirectoryA(MAX_PATH, cache_dir);
+    if (len > 0 && len + 14 < MAX_PATH) {
+        if (cache_dir[len - 1] != '\\') {
+            cache_dir[len++] = '\\';
+        }
+        const char sub[] = "shader_cache";
+        for (DWORD i = 0; i < sizeof(sub); i++) {
+            cache_dir[len + i] = sub[i];
+        }
+        CreateDirectoryA(cache_dir, NULL);
+        SetEnvironmentVariableA("MESA_SHADER_CACHE_DIR", cache_dir);
+        SetEnvironmentVariableA("DXVK_STATE_CACHE_PATH", cache_dir);
+    }
 
     // 动态装载官方无壳 Unity 引擎核心
     HMODULE hUnity = LoadLibraryW(L"UnityPlayer.dll");
