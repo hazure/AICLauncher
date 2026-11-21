@@ -27,8 +27,8 @@ void WinMainCRTStartup(void) {
     // 锚定工作目录至当前程序所在目录
     SetCurrentDirectoryW(L".");
 
-    // 动态注入性能与转译优化环境变量（零 CRT 依赖）
-    SetEnvironmentVariableA("BOX64_DYNAREC_BIGBLOCK", "2");
+    // 动态注入环境参数（保稳定、控开销、提准度，零 CRT 依赖）
+    SetEnvironmentVariableA("BOX64_DYNAREC_BIGBLOCK", "1");
     SetEnvironmentVariableA("BOX64_DYNAREC_SAFEFLAGS", "1");
     SetEnvironmentVariableA("BOX64_DYNAREC_ALIGNED_ATOMICS", "1");
     SetEnvironmentVariableA("BOX64_DYNAREC_STRONGMEM", "1");
