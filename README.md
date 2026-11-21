@@ -187,6 +187,35 @@ alice-in-cradle-030-vm-patch/
 5. **启动游戏**：
    在对应 Wine 或虚拟化容器中启动 `AliceInCradle.exe`，验证是否正常进入标题画面。
 
+### 4.5 启动器多编译器编译支持
+
+为方便不同开发环境的读者学习与复现，`src/stub_perfect.c` 支持各大主流 C 编译套件直接编译：
+
+- **Clang (llvm-mingw)**：
+  ```bash
+  x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib -Wl,-e,WinMainCRTStartup \
+    -o "$AIC_GAME_DIR/AliceInCradle.exe" src/stub_perfect.c -lkernel32
+  ```
+- **GCC (mingw-w64)**：
+  ```bash
+  x86_64-w64-mingw32-gcc -O2 -s -mwindows -nostdlib -e WinMainCRTStartup \
+    -o "$AIC_GAME_DIR/AliceInCradle.exe" src/stub_perfect.c -lkernel32
+  ```
+- **MSVC (Visual Studio x64 Native Tools)**：
+  ```cmd
+  cl.exe /O2 /GS- /W3 src\stub_perfect.c /link /SUBSYSTEM:WINDOWS /ENTRY:WinMainCRTStartup /NODEFAULTLIB kernel32.lib /OUT:"%AIC_GAME_DIR%\AliceInCradle.exe"
+  ```
+
+### 4.6 常见运行问题与排查指南（FAQ）
+
+#### Q1: 初次进入游戏，弹出年龄确认界面时画面定格、按钮没有样式仅有文字？
+- **原因 1（命令行参数编码）**：早期版本的启动桩错误传入了 ANSI `GetCommandLineA()`。64 位 Unity 播放器内部使用 `SHELL32.dll!CommandLineToArgvW` 解析参数，ANSI 字节被拼成乱码 Unicode 造成参数解析异常与消息循环挂起。请务必拉取最新仓库代码，重新编译基于 `GetCommandLineW()` 的启动器。
+- **原因 2（哈希校验未完成）**：`unsafeAssem.dll` 补丁后未同步更新 `_sha.txt`。请严格执行 `python3 update_sha.py`，确保原生哈希校验顺畅通过。
+
+#### Q2: 首次启动可正常进入游戏，退出后第二次启动黑屏、无响应或崩溃？
+- **原因（全屏模式导致交换链重建失败）**：首次运行保存设置后，游戏配置了全屏模式（`CFG.fullscreen_mode == true`）。在下次启动时，游戏在生命周期极早期通过 `Screen.SetResolution` 强行切换全屏，在 Wine/Turnip 驱动下极易引发 Vulkan Swapchain 重建失败或 X11 窗口失焦挂起。
+- **解决方案**：在游戏设置中始终保持**窗口化模式（Windowed Mode）**运行，切勿开启独占全屏。
+
 ---
 
 ## 5. 法律声明、使用守则与正版支持倡议
