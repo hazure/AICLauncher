@@ -16,6 +16,7 @@
 
 * **工具链使用与实战**
   * [快速上手指引](guide/quickstart.md)
+  * [Turnip/DXVK 驱动搭配指南](guide/performance.md)
   * [多编译器构建指南](guide/compiler.md)
   * [常见问题与避坑指南 (FAQ)](guide/faq.md)
 
