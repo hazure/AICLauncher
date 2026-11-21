@@ -5,6 +5,10 @@ Author: Maintainer
 Description:
     Reads a legitimate copy of unsafeAssem.dll, verifies original byte sequences,
     creates a backup, and patches the VM/environment checks in-place.
+    Path resolution:
+      1. CLI argument: python3 patch_unsafeAssem.py [path_to_dll_or_game_dir]
+      2. Environment variable: export AIC_GAME_DIR=/path/to/game
+      3. Relative to current working directory
 """
 
 import os
@@ -23,11 +27,48 @@ PATCH_SENS_BYTES = bytes.fromhex("26162a00000000000000")
 PATCH_SP_BYTES   = bytes.fromhex("26162a00000000000000")
 PATCH_AWK_BYTES  = bytes.fromhex("2b17" + "00" * 23)
 
-def patch_file(dll_path):
-    if not os.path.exists(dll_path):
-        print(f"Error: File not found at {dll_path}")
-        return False
+def resolve_target_dll():
+    if len(sys.argv) > 1:
+        arg_path = sys.argv[1]
+        if os.path.isfile(arg_path):
+            return arg_path
+        if os.path.isdir(arg_path):
+            candidate = os.path.join(arg_path, "AliceInCradle_Data", "Managed", "unsafeAssem.dll")
+            if os.path.isfile(candidate):
+                return candidate
+            candidate2 = os.path.join(arg_path, "Managed", "unsafeAssem.dll")
+            if os.path.isfile(candidate2):
+                return candidate2
 
+    env_dir = os.environ.get("AIC_GAME_DIR")
+    if env_dir and os.path.exists(env_dir):
+        if os.path.isfile(env_dir):
+            return env_dir
+        candidate = os.path.join(env_dir, "AliceInCradle_Data", "Managed", "unsafeAssem.dll")
+        if os.path.isfile(candidate):
+            return candidate
+        candidate2 = os.path.join(env_dir, "Managed", "unsafeAssem.dll")
+        if os.path.isfile(candidate2):
+            return candidate2
+
+    cwd_candidates = [
+        "unsafeAssem.dll",
+        "Managed/unsafeAssem.dll",
+        "AliceInCradle_Data/Managed/unsafeAssem.dll"
+    ]
+    for c in cwd_candidates:
+        if os.path.isfile(c):
+            return os.path.abspath(c)
+
+    print("Error: Target unsafeAssem.dll could not be located.")
+    print("Please configure the AIC_GAME_DIR environment variable:")
+    print("  export AIC_GAME_DIR=/path/to/AliceInCradle_ver030")
+    print("Or specify the DLL file directly:")
+    print(f"  python3 {sys.argv[0]} /path/to/AliceInCradle_Data/Managed/unsafeAssem.dll")
+    sys.exit(1)
+
+def patch_file(dll_path):
+    print(f"Target assembly: {dll_path}")
     with open(dll_path, "rb") as f:
         data = bytearray(f.read())
 
@@ -37,7 +78,7 @@ def patch_file(dll_path):
     awk_actual  = data[TARGET_AWK_OFF:TARGET_AWK_OFF + len(ORIG_AWK_BYTES)]
 
     if sens_actual == PATCH_SENS_BYTES and awk_actual == PATCH_AWK_BYTES:
-        print("Notice: This DLL is already patched.")
+        print("Notice: This DLL has already been patched.")
         return True
 
     if sens_actual != ORIG_SENS_BYTES:
@@ -68,26 +109,8 @@ def patch_file(dll_path):
     return True
 
 def main():
-    target = None
-    if len(sys.argv) > 1:
-        target = sys.argv[1]
-    else:
-        # Default search locations
-        candidates = [
-            "unsafeAssem.dll",
-            "AliceInCradle_Data/Managed/unsafeAssem.dll",
-            "/storage/emulated/0/Documents/AliceInCradle_ver030/AliceInCradle_Data/Managed/unsafeAssem.dll"
-        ]
-        for c in candidates:
-            if os.path.exists(c):
-                target = c
-                break
-
-    if not target:
-        print(f"Usage: {sys.argv[0]} [path_to_unsafeAssem.dll]")
-        sys.exit(1)
-
-    success = patch_file(target)
+    target_dll = resolve_target_dll()
+    success = patch_file(target_dll)
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":

@@ -1,19 +1,42 @@
+#!/usr/bin/env python3
+"""
+delete_mb_v2.py - Alternative deletion of MonoBehaviour PathID 12 from level3.
+Environment variable: AIC_GAME_DIR
+"""
+import os
+import sys
 import UnityPy
 
-path = "/data/data/com.termux/files/home/storage/shared/Documents/AliceInCradle_ver030/AliceInCradle_Data/level3"
+def get_level3_path():
+    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
+        return sys.argv[1]
+    env_dir = os.environ.get("AIC_GAME_DIR")
+    if env_dir:
+        c1 = os.path.join(env_dir, "AliceInCradle_Data", "level3")
+        if os.path.exists(c1):
+            return c1
+        c2 = os.path.join(env_dir, "level3")
+        if os.path.exists(c2):
+            return c2
+    for c in ["level3", "AliceInCradle_Data/level3"]:
+        if os.path.exists(c):
+            return os.path.abspath(c)
+    print("Error: level3 asset not found. Please set AIC_GAME_DIR environment variable:")
+    print("  export AIC_GAME_DIR=/path/to/AliceInCradle_ver030")
+    sys.exit(1)
+
+path = get_level3_path()
 print(f"Loading {path} ...")
 env = UnityPy.load(path)
 
 count_before = len(env.objects)
 
-# UnityPy 的 env.file 包含了底层结构
-# 我们通过操作 env.file.objects 这个真正的字典来移除 PathID 12
 if hasattr(env, 'file') and hasattr(env.file, 'objects'):
     if 12 in env.file.objects:
         del env.file.objects[12]
         print("Successfully deleted PathID 12 from env.file.objects dictionary.")
     else:
-        print("PathID 12 not found in env.file.objects (maybe it was already removed).")
+        print("PathID 12 not found in env.file.objects.")
 else:
     print("Could not access env.file.objects")
 

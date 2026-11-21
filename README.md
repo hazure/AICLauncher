@@ -126,41 +126,66 @@ int UnityMain2(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, in
 
 *注：若游戏后续发布微版本更新（如 0.31 或更高），由于 DLL 内部偏移与节区变动，直接覆盖可能导致散列校验失效，需重新计算偏移。*
 
-### 4.2 仓库目录结构
+### 4.2 环境变量配置（必须优先配置）
+
+为了保证脚本在不同操作系统（Linux、Android Termux、Windows）及不同安装路径下均可无缝定位游戏目录，本仓库中所有 Python 脚本（包括主补丁脚本、校验更新脚本以及 `tests/` 目录下的全部测试套件）均已彻底移除了任何路径硬编码，统一采用 `AIC_GAME_DIR` 环境变量作为标准入口。
+
+在执行任何修补或测试脚本前，请根据您的操作系统在终端中导出该变量：
+
+```bash
+# Linux / Android (Termux) 环境：
+export AIC_GAME_DIR="/storage/emulated/0/Documents/AliceInCradle_ver030"
+
+# Windows (命令提示符 CMD) 环境：
+set AIC_GAME_DIR=D:\Games\AliceInCradle_ver030
+
+# Windows (PowerShell) 环境：
+$env:AIC_GAME_DIR="D:\Games\AliceInCradle_ver030"
+```
+
+*注：若未配置该环境变量，各脚本也支持直接将游戏根目录或目标文件路径作为首个命令行参数传入（例如 `python3 patch_unsafeAssem.py /path/to/game`），或者在游戏根目录下直接运行。*
+
+### 4.3 仓库目录结构
 
 ```
 alice-in-cradle-030-vm-patch/
-├── AliceInCradle.exe                     # 预编译好的纯净 Win64 启动器
-├── AliceInCradle_Data/
-│   ├── Managed/
-│   │   └── unsafeAssem.dll               # 经过控制流 Patch 的程序集
-│   └── StreamingAssets/
-│       └── _sha.txt                      # 与 Patch 后的 DLL 匹配的散列表
+├── .gitignore                            # Git 追踪忽略规则（排除闭源二进制）
+├── README.md                             # 本技术文档
+├── patch_unsafeAssem.py                  # 本地自动化 PE/IL 原地修补引擎
+├── update_sha.py                         # SHA-256 自动化重新计算与同步脚本
 ├── src/
-│   └── stub_perfect.c                    # 启动器 C 源码
-├── update_sha.py                         # SHA-256 自动化重新计算脚本
-└── README.md                             # 本技术文档
+│   └── stub_perfect.c                    # 纯净 Win64 启动器原生 C 源码（无 CRT 依赖）
+└── tests/                                # 各阶段历史探索与测试归因案例库
+    ├── 01_asset_suppression_attempts/    # 资产层修补实验
+    ├── 02_dll_hijacking_attempts/        # DLL 劫持侧载实验
+    ├── 03_native_engine_analysis/        # 原生引擎反汇编分析
+    ├── 04_launcher_stub_evolution/       # 启动器演进史
+    ├── 05_pe_il_analysis_tools/          # PE 节区解析与偏移计算工具
+    └── README.md                         # 测试套件深度复盘说明
 ```
 
-### 4.3 部署步骤
+### 4.4 补丁应用流程
 
-1. **备份原始文件**：
-   在操作前，请务必备份游戏根目录下的以下文件：
-   - `AliceInCradle.exe`
-   - `AliceInCradle_Data/Managed/unsafeAssem.dll`
-   - `AliceInCradle_Data/StreamingAssets/_sha.txt`
-2. **应用补丁**：
-   将本仓库中的 `AliceInCradle.exe` 与 `AliceInCradle_Data` 文件夹直接复制并覆盖至游戏根目录下。
-3. **运行验证**：
-   在对应 Wine 或虚拟化容器中启动 `AliceInCradle.exe`。程序将直接跳过虚拟化阻断逻辑，初始化渲染管线并进入游戏标题画面。
-
-### 4.4 从源码构建启动器（可选）
-
-如需自行审计并编译启动器二进制，在具备 `llvm-mingw` 或 `mingw-w64` 的环境下执行：
-```bash
-x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib -Wl,-e,WinMainCRTStartup \
-  -o AliceInCradle.exe src/stub_perfect.c -lkernel32
-```
+1. **设置环境变量**：
+   按照 4.2 节说明导出 `AIC_GAME_DIR`，确保脚本能正确读取游戏文件。
+2. **编译并部署纯净启动器**：
+   在具备 `llvm-mingw` 或 `mingw-w64` 的环境下编译源码，并将生成的启动器部署至游戏根目录替换原加壳文件（请提前备份原程序）：
+   ```bash
+   x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib -Wl,-e,WinMainCRTStartup \
+     -o "$AIC_GAME_DIR/AliceInCradle.exe" src/stub_perfect.c -lkernel32
+   ```
+3. **执行本地托管程序集修补**：
+   运行本地修补脚本。脚本会自动验证原始字节签名、备份原文件为 `.orig` 并执行字节码重定向：
+   ```bash
+   python3 patch_unsafeAssem.py
+   ```
+4. **重新同步文件校验散列表**：
+   运行校验表更新脚本，自动计算新修补 DLL 的 SHA-256 并更新写回 `_sha.txt`：
+   ```bash
+   python3 update_sha.py
+   ```
+5. **启动游戏**：
+   在对应 Wine 或虚拟化容器中启动 `AliceInCradle.exe`，验证是否正常进入标题画面。
 
 ---
 

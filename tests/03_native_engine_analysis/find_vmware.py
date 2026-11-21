@@ -1,22 +1,44 @@
+#!/usr/bin/env python3
+"""
+find_vmware.py - Disassembles executable sections searching for references to VirtualBox.
+Environment variable: AIC_GAME_DIR
+"""
+import os
+import sys
 import pefile
 from capstone import *
 
-path = "/data/data/com.termux/files/home/aic/work/UnityPlayer_clean.dll"
+def get_target_path():
+    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
+        return sys.argv[1]
+    env_dir = os.environ.get("AIC_GAME_DIR")
+    if env_dir:
+        cand = os.path.join(env_dir, "UnityPlayer.dll")
+        if os.path.exists(cand):
+            return cand
+    for c in ["UnityPlayer.dll", "UnityPlayer_clean.dll"]:
+        if os.path.exists(c):
+            return os.path.abspath(c)
+    print("Error: Target UnityPlayer.dll not found. Please set AIC_GAME_DIR environment variable:")
+    print("  export AIC_GAME_DIR=/path/to/AliceInCradle_ver030")
+    print("Or specify the file directly:")
+    print(f"  python3 {sys.argv[0]} /path/to/UnityPlayer.dll")
+    sys.exit(1)
 
-# 1. 加载 PE
+path = get_target_path()
+print(f"Analyzing {path} ...")
+
 pe = pefile.PE(path)
 image_base = pe.OPTIONAL_HEADER.ImageBase
 
-# 2. 找到 VirtualBox 字符串所在的文件偏移和虚拟地址
 with open(path, "rb") as f:
     data = f.read()
 
 str_offset = data.find(b"VirtualBox")
 if str_offset == -1:
     print("VirtualBox string not found in file. Aborting.")
-    exit()
+    sys.exit(0)
 
-# 计算虚拟地址
 str_va = 0
 for section in pe.sections:
     if section.PointerToRawData <= str_offset < section.PointerToRawData + section.SizeOfRawData:
@@ -25,7 +47,6 @@ for section in pe.sections:
 
 print(f"VirtualBox string found at file offset: {str_offset}, Virtual Address: 0x{str_va:X}")
 
-# 3. 遍历所有可执行节区，找引用这个地址的指令
 md = Cs(CS_ARCH_X86, CS_MODE_64)
 md.detail = True
 
