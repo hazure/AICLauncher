@@ -11,8 +11,41 @@
     :root {
       --theme-color: #2c3e50;
     }
+    html, body {
+      min-width: 320px;
+    }
     .markdown-section {
       max-width: 900px;
+      padding: 20px 15px;
+    }
+    /* Mobile-first code & table scrolling */
+    .markdown-section pre,
+    .markdown-section pre > code {
+      overflow-x: auto;
+      white-space: pre;
+      word-wrap: normal;
+    }
+    .markdown-section table {
+      display: block;
+      width: 100%;
+      overflow-x: auto;
+      border-spacing: 0;
+      border-collapse: collapse;
+    }
+    /* Touch target sizing for mobile (>= 24px) */
+    .sidebar-nav a {
+      min-height: 28px;
+      line-height: 28px;
+      display: inline-block;
+    }
+    .app-nav a {
+      min-height: 28px;
+      line-height: 28px;
+    }
+    @media screen and (max-width: 600px) {
+      .markdown-section {
+        padding: 15px 10px;
+      }
     }
   </style>
 </head>
