@@ -11,7 +11,7 @@
 1. 零运行时依赖：切断 C 运行时库，纯静态链接系统核心 API。
 2. GUI 子系统规范：声明 `-mwindows`，启动时不闪烁控制台黑框。
 3. ABI 栈对齐：保证 x86-64 架构 16 字节栈对齐并预留影子空间。
-4. 宽字符接口：向引擎传递 `GetCommandLineW()` 宽字符指针。
+4. 命令行接口：向引擎传递 `GetCommandLineA()` 命令行参数。
 
 ## 3. 源码实现
 
@@ -20,8 +20,8 @@
 ```c
 #include <windows.h>
 
-// 声明标准宽字符指针类型
-typedef int (*UnityMain2_t)(HINSTANCE, HINSTANCE, LPWSTR, int);
+// 声明标准字符串指针类型
+typedef int (*UnityMain2_t)(HINSTANCE, HINSTANCE, LPSTR, int);
 
 void WinMainCRTStartup(void) {
     // 锚定工作目录至当前程序所在目录
@@ -40,9 +40,9 @@ void WinMainCRTStartup(void) {
         ExitProcess(2);
     }
 
-    // 传递宽字符命令行并启动引擎
+    // 传递命令行并启动引擎
     int ret = UnityMain2(
-        GetModuleHandleW(NULL), NULL, GetCommandLineW(), SW_SHOW);
+        GetModuleHandleW(NULL), NULL, GetCommandLineA(), SW_SHOW);
 
     ExitProcess(ret);
 }

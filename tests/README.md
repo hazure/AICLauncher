@@ -116,7 +116,7 @@ tests/
   - 入口函数指定为自定义的 `WinMainCRTStartup`；
   - 仅链接系统底层 `KERNEL32.dll`；
   - 显式保证 x86-64 ABI 的 16 字节栈对齐要求，并为 `UnityMain2` 预留 32 字节 Shadow Space；
-  - **重要参数类型规范**：通过对 `UnityPlayer.dll`（RVA `0x180817440`）深入反编译，确认其内部直接将第三参数传给 `SHELL32.dll!CommandLineToArgvW` 进行宽字符分词。因此该参数必须严格声明为 `LPWSTR` 并传入 `GetCommandLineW()`。若错误传入 ANSI 单字节字符串（`GetCommandLineA()`），相邻 ASCII 字节将被解释为双字节 Unicode 字符（例如 `"AliceInCradle.exe"` 会被解析为乱码字符 `'汁捩䥥䍮慲汤...'`），引发 Unity 启动参数解析器越界或异常，导致窗口消息循环与输入事件挂起。
+  - 传入 `GetCommandLineA()` 传递启动命令行参数。
 - **结果**：编译产物体积仅为 2.5 KB，没有任何第三方或高版本 CRT 依赖，具备最高的跨容器与跨 Wine 版本兼容性。
 
 ---

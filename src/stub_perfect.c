@@ -1,6 +1,6 @@
 #include <windows.h>
 
-typedef int (*UnityMain2_t)(HINSTANCE, HINSTANCE, LPWSTR, int);
+typedef int (*UnityMain2_t)(HINSTANCE, HINSTANCE, LPSTR, int);
 
 void WinMainCRTStartup(void) {
     SetCurrentDirectoryW(L".");
@@ -12,6 +12,7 @@ void WinMainCRTStartup(void) {
     if (!UnityMain2) {
         ExitProcess(2);
     }
-    int ret = UnityMain2(GetModuleHandleW(NULL), NULL, GetCommandLineW(), SW_SHOW);
+    int ret = UnityMain2(GetModuleHandleW(NULL), NULL, GetCommandLineA(), SW_SHOW);
     ExitProcess(ret);
 }
+
