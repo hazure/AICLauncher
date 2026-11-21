@@ -129,7 +129,7 @@ int UnityMain2(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, in
 ### 4.2 仓库目录结构
 
 ```
-aic030_novm_patch/
+alice-in-cradle-030-vm-patch/
 ├── AliceInCradle.exe                     # 预编译好的纯净 Win64 启动器
 ├── AliceInCradle_Data/
 │   ├── Managed/
