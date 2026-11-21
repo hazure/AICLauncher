@@ -64,26 +64,35 @@ void WinMainCRTStartup(void) {
         ExitProcess(2);
     }
 
-    // 传递命令行并启动引擎
+    // 动态分辨率软编码与无边框窗口接管（绕开 DXVK 交换链重建崩溃）
+    int screen_w = GetSystemMetrics(SM_CXSCREEN);
+    int screen_h = GetSystemMetrics(SM_CYSCREEN);
+
+    char cmdline[256];
+    wsprintfA(cmdline,
+        "-screen-width %d -screen-height %d -popupwindow -screen-fullscreen 0",
+        screen_w, screen_h);
+
+    // 传递动态命令行并启动引擎
     int ret = UnityMain2(
-        GetModuleHandleW(NULL), NULL, GetCommandLineA(), SW_SHOW);
+        GetModuleHandleW(NULL), NULL, cmdline, SW_SHOW);
 
     ExitProcess(ret);
 }
 ```
 
-## 4. 关键参数规范
+## 4. 动态分辨率与显示模式接管
 
-反汇编表明，`UnityPlayer.dll`（RVA `0x180817440`）内部直接调用：
-`SHELL32.dll!CommandLineToArgvW(LPCWSTR, int*)`。
-若传递 ANSI 单字节字符串，相邻字节将被误解为乱码 Unicode。
-这会引发参数解析越界或消息循环死锁，因此必须严格传入宽字符。
+在移动端 Android 转译环境（Wine / Box64 / DXVK）下，游戏内部切换全屏/窗口化或变更分辨率时，会触发 DXVK 底层 Vulkan Swapchain 的重建。
+由于移动 GPU（如 Adreno 系列）驱动对交换链频繁重置较为敏感，极易引发 `VK_ERROR_DEVICE_LOST` 异常并导致引擎崩溃。
+本启动桩通过调用 `GetSystemMetrics` 动态获取当前容器宿主分辨率，软编码注入 `-screen-width`、`-screen-height`、`-popupwindow` 与 `-screen-fullscreen 0`。
+通过在启动器层面强制锁定无边框窗口化，彻底消除了游戏运行期间交换链被重构的风险。
 
 ## 5. 编译产物对比
 
 - 官方加壳文件：体积 12.35 MB，包含 `.aic0` 等自定义混淆节。
-- 开源重构引导器：体积 2.50 KB，仅包含标准 `.text` 与 `.idata` 节。
-- 依赖项：加壳版依赖特权探测，重构版仅链接系统底层 `KERNEL32.dll`。
+- 开源重构引导器：体积约 3.50 KB，仅包含标准 `.text` 与 `.idata` 节。
+- 依赖项：加壳版依赖特权探测，重构版仅链接系统底层 `KERNEL32.dll` 与 `USER32.dll`。
 
 ## 6. 参考链接
 

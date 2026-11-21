@@ -75,7 +75,7 @@ set AIC_GAME_DIR=D:\Games\AliceInCradle_ver030
 ```bash
 # 1. 编译并部署纯净启动器（替换原 AliceInCradle.exe）
 x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib -Wl,-e,WinMainCRTStartup \
-  -o "$AIC_GAME_DIR/AliceInCradle.exe" src/stub_perfect.c -lkernel32
+  -o "$AIC_GAME_DIR/AliceInCradle.exe" src/stub_perfect.c -lkernel32 -luser32
 
 # 2. 执行本地托管代码自适应重定向（自动同步 _sha.txt）
 python3 patch_unsafeAssem.py
@@ -102,15 +102,19 @@ wine "$AIC_GAME_DIR/AliceInCradle.exe"
 | **Box64 Dynarec** | `0.3.0+` | 采用保守基本块生成，控制编译 CPU 尖峰开销 |
 | **渲染模式** | 独占全屏 (Native) | 保持与容器原生分辨率 1:1 输出 |
 
-### 5.2 启动桩环境参数注入（控开销与对齐物理机）
-在最新版本的极简引导启动器（`src/stub_perfect.c`）中，程序已在调用 Unity 引擎前动态注入以下环境变量（仅基于 Win32 `KERNEL32.dll`，无任何 CRT 依赖）：
+### 5.2 启动桩环境参数注入与动态分辨率软编码接管
+在最新版本的极简引导启动器（`src/stub_perfect.c`）中，程序已在调用 Unity 引擎前动态注入以下环境变量并软编码接管显示模式（仅基于 Win32 `KERNEL32.dll` 与 `USER32.dll`，无任何 CRT 依赖）：
 - `BOX64_DYNAREC_BIGBLOCK=1`：放弃激进的 BIGBLOCK=2，改用保守基本块重编译策略，避免翻译缓存未命中引发的 CPU 异常尖峰与瞬时卡顿；
 - `BOX64_DYNAREC_SAFEFLAGS=1`：优化状态标志寄存器模拟，兼顾指令安全性与分支效率；
 - `BOX64_DYNAREC_ALIGNED_ATOMICS=1`：强制多线程原子操作内存对齐，避免 Unity JobSystem 多线程锁竞争异常；
 - `BOX64_DYNAREC_STRONGMEM=1`：模拟强内存模型（Strong Memory Model），在 ARM 弱内存序硬件下保障内存屏障与锁序，杜绝高负载死锁；
 - `DXVK_ASYNC=1`：开启非阻塞管线异步编译，消除初次着色器构建卡顿；
 - `MESA_SHADER_CACHE=1`：开启 Mesa 底层磁盘持久化着色器缓存；
-- `MESA_SHADER_CACHE_DIR` 与 `DXVK_STATE_CACHE_PATH`：启动时通过 `GetCurrentDirectoryA` 动态获取游戏目录，自动创建并绑定 `shader_cache` 目录，确保着色器与管线状态缓存获得绝对持久化存储，杜绝冷启动与重复编译阻塞。
+- `MESA_SHADER_CACHE_DIR` 与 `DXVK_STATE_CACHE_PATH`：启动时通过 `GetCurrentDirectoryA` 动态获取游戏目录，自动创建并绑定 `shader_cache` 目录，确保着色器与管线状态缓存获得绝对持久化存储，杜绝冷启动与重复编译阻塞；
+- **动态分辨率软编码与无边框窗口接管**：通过 `GetSystemMetrics(SM_CXSCREEN)` 与 `GetSystemMetrics(SM_CYSCREEN)` 动态获取 Wine 容器真实分辨率，严禁硬编码静态数值，自动拼接 `-screen-width <宽> -screen-height <高> -popupwindow -screen-fullscreen 0` 传递给 Unity 引擎，从启动源头彻底绕开底层 DXVK 交换链重建风险。
+
+> [!WARNING]
+> **启动器已动态接管显示模式并锁定为无边框窗口，请勿在游戏内切换全屏，以免触发移动端转译层的图形上下文丢失（Device Lost）崩溃。**
 
 ### 5.3 底层性能与稳定性说明
 在转译层（Box64 / Wine / DXVK），性能瓶颈往往会引发 CPU 异常开销，进而导致移动端温控降频与引擎崩溃。

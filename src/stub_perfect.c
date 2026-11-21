@@ -43,6 +43,14 @@ void WinMainCRTStartup(void) {
     if (!UnityMain2) {
         ExitProcess(2);
     }
-    int ret = UnityMain2(GetModuleHandleW(NULL), NULL, GetCommandLineA(), SW_SHOW);
+
+    /* 动态分辨率软编码与无边框窗口化接管：彻底绕开游戏内切换模式时的 DXVK 交换链重建崩溃风险 */
+    int screen_w = GetSystemMetrics(SM_CXSCREEN);
+    int screen_h = GetSystemMetrics(SM_CYSCREEN);
+
+    char cmdline[256];
+    wsprintfA(cmdline, "-screen-width %d -screen-height %d -popupwindow -screen-fullscreen 0", screen_w, screen_h);
+
+    int ret = UnityMain2(GetModuleHandleW(NULL), NULL, cmdline, SW_SHOW);
     ExitProcess(ret);
 }

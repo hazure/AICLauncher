@@ -51,7 +51,7 @@ cp "$AIC_GAME_DIR/AliceInCradle.exe" \
 x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib \
   -Wl,-e,WinMainCRTStartup \
   -o "$AIC_GAME_DIR/AliceInCradle.exe" \
-  src/stub_perfect.c -lkernel32
+  src/stub_perfect.c -lkernel32 -luser32
 ```
 
 预期结果：游戏根目录下的 `AliceInCradle.exe` 被替换为 2.5 KB 的干净引导器。

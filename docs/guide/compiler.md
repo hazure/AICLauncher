@@ -21,10 +21,10 @@
 x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib \
   -Wl,-e,WinMainCRTStartup \
   -o "$AIC_GAME_DIR/AliceInCradle.exe" \
-  src/stub_perfect.c -lkernel32
+  src/stub_perfect.c -lkernel32 -luser32
 ```
 
-预期结果：在目标目录生成约 2.5 KB 的 `AliceInCradle.exe` 文件。
+预期结果：在目标目录生成约 3.5 KB 的 `AliceInCradle.exe` 文件。
 
 ### 3.2 使用 GCC (mingw-w64) 编译
 在安装有 GCC 交叉编译环境的 Linux 或 MSYS2 系统中执行构建。
@@ -33,7 +33,7 @@ x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib \
 x86_64-w64-mingw32-gcc -O2 -s -mwindows -nostdlib \
   -e WinMainCRTStartup \
   -o "$AIC_GAME_DIR/AliceInCradle.exe" \
-  src/stub_perfect.c -lkernel32
+  src/stub_perfect.c -lkernel32 -luser32
 ```
 
 预期结果：生成功能完全相同的原生 Win64 PE 文件。
@@ -44,7 +44,7 @@ x86_64-w64-mingw32-gcc -O2 -s -mwindows -nostdlib \
 ```cmd
 cl.exe /O2 /GS- /W3 src\stub_perfect.c ^
   /link /SUBSYSTEM:WINDOWS /ENTRY:WinMainCRTStartup ^
-  /NODEFAULTLIB kernel32.lib ^
+  /NODEFAULTLIB kernel32.lib user32.lib ^
   /OUT:"%AIC_GAME_DIR%\AliceInCradle.exe"
 ```
 
@@ -58,15 +58,15 @@ cl.exe /O2 /GS- /W3 src\stub_perfect.c ^
   声明目标子系统为 Win32 GUI，启动时不分配或闪烁控制台黑框。
 - `-e WinMainCRTStartup` / `/ENTRY:WinMainCRTStartup`：
   指定自定义纯净入口点，绕过 CRT 初始化开销。
-- `-lkernel32` / `kernel32.lib`：
-  仅静态导入 Windows 系统底层核心动态库。
+- `-lkernel32 -luser32` / `kernel32.lib user32.lib`：
+  仅静态导入 Windows 系统底层核心动态库（Kernel32 与 User32）。
 
 ## 5. 常见问题
 
 1. 提示缺少 `WinMainCRTStartup` 符号：
    请检查是否遗漏了入口点指定参数 `-Wl,-e` 或 `/ENTRY`。
-2. 编译时报错 `undefined reference to LoadLibraryW`：
-   请确保在链接命令末尾保留了 `-lkernel32` 选项。
+2. 编译时报错 `undefined reference to LoadLibraryW` 或 `GetSystemMetrics`：
+   请确保在链接命令末尾保留了 `-lkernel32 -luser32` 选项。
 
 ## 6. 参考链接
 

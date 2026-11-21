@@ -18,15 +18,19 @@
 | **Box64 Dynarec** | `0.3.0+` | 采用保守基本块生成，控制编译 CPU 尖峰开销 |
 | **渲染模式** | 独占全屏 (Native) | 保持与容器原生分辨率 1:1 输出 |
 
-### 2.2 启动桩环境参数自动注入（控开销与对齐物理机）
-在最新版本的引导启动器（`src/stub_perfect.c`）中，程序已在调用引擎前自动注入以下环境变量（仅调用 Win32 原生 API，无任何 C 运行时依赖）：
+### 2.2 启动桩环境参数自动注入与软编码动态分辨率接管
+在最新版本的引导启动器（`src/stub_perfect.c`）中，程序已在调用引擎前自动注入以下环境变量并软编码接管显示模式（仅调用 Win32 原生 API，无任何 C 运行时依赖）：
 - `BOX64_DYNAREC_BIGBLOCK=1`：放弃激进的 BIGBLOCK=2，改用保守基本块重编译策略，避免翻译缓存未命中引发的 CPU 异常尖峰与瞬时卡顿；
 - `BOX64_DYNAREC_SAFEFLAGS=1`：优化状态标志寄存器模拟，兼顾安全性与分支效率；
 - `BOX64_DYNAREC_ALIGNED_ATOMICS=1`：强制多线程原子操作内存对齐，避免 Unity JobSystem 多线程锁竞争异常；
 - `BOX64_DYNAREC_STRONGMEM=1`：模拟强内存模型（Strong Memory Model），在 ARM 弱内存序架构下提供严格的内存屏障保护，防止高负载下线程死锁；
 - `DXVK_ASYNC=1`：开启非阻塞管线异步编译，消除初次着色器构建卡顿；
 - `MESA_SHADER_CACHE=1`：开启 Mesa 底层磁盘持久化着色器缓存；
-- `MESA_SHADER_CACHE_DIR` 与 `DXVK_STATE_CACHE_PATH`：启动时通过 `GetCurrentDirectoryA` 动态获取游戏目录，自动创建并绑定 `shader_cache` 目录，确保着色器与管线状态缓存获得绝对持久化存储。
+- `MESA_SHADER_CACHE_DIR` 与 `DXVK_STATE_CACHE_PATH`：启动时通过 `GetCurrentDirectoryA` 动态获取游戏目录，自动创建并绑定 `shader_cache` 目录，确保着色器与管线状态缓存获得绝对持久化存储；
+- **动态分辨率软编码与无边框窗口接管**：通过 `GetSystemMetrics(SM_CXSCREEN)` 与 `GetSystemMetrics(SM_CYSCREEN)` 动态获取 Wine 容器真实分辨率，严禁硬编码静态数值，自动拼接 `-screen-width <宽> -screen-height <高> -popupwindow -screen-fullscreen 0` 传递给 Unity 引擎，从启动源头彻底绕开底层 DXVK 交换链重建风险。
+
+> [!WARNING]
+> **启动器已动态接管显示模式并锁定为无边框窗口，请勿在游戏内切换全屏，以免触发移动端转译层的图形上下文丢失（Device Lost）崩溃。**
 
 ## 3. 物理机对齐与着色器缓存持久化
 
