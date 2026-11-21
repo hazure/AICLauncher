@@ -28,8 +28,9 @@
 
 ### 2.2 核心方案特性
 - **外层 Themida 壳剥离**：编写零 C 运行时（Zero-CRT）依赖的 2.5 KB 原生 Win64 极简引导程序（`stub_perfect.c`），直调 `UnityPlayer.dll!UnityMain2`，彻底解除加壳工具的虚拟化弹窗与环境误报；
-- **内层 CIL 字节码重定向**：精准重定向 `unsafeAssem.dll` 中 `XX.IN::Awake()` 的条件分支，仅改动 34 字节原地跳过 GPU/驱动与 Wine 挂载路径探测；
-- **哈希散列表动态同步**：通过 `update_sha.py` 自动化计算并同步 `StreamingAssets/_sha.txt`，保证原生 `SHAChecker` 毫秒级通过，避免状态机死锁。
+- **内层 CIL 字节码自适应重定向**：采用纯 Python 基于上下文特征码与 CLI 元数据定位 `unsafeAssem.dll` 中 `XX.IN::Awake()` 的检测分支，实现 25 字节等长原位改写（In-place Patching），彻底解除对硬编码物理偏移的脆弱依赖；
+- **哈希散列表自动联动**：修补器内置重新计算 SHA-256 并自动同步至 `StreamingAssets/_sha.txt`，亦可搭配 `update_sha.py` 全量核验，保证原生 `SHAChecker` 毫秒级通过；
+- **关键逻辑物理隔离**：严格隔离反虚机逻辑与非相关功能，严禁修改游戏内容分级属性（`get_SENSITIVE`），杜绝 Mono JIT 字节码越界校验异常。
 
 ---
 
@@ -75,11 +76,11 @@ set AIC_GAME_DIR=D:\Games\AliceInCradle_ver030
 x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib -Wl,-e,WinMainCRTStartup \
   -o "$AIC_GAME_DIR/AliceInCradle.exe" src/stub_perfect.c -lkernel32
 
-# 2. 执行本地托管代码重定向
+# 2. 执行本地托管代码自适应重定向（自动同步 _sha.txt）
 python3 patch_unsafeAssem.py
 
-# 3. 重新同步校验散列表
-python3 update_sha.py
+# 3. 运行内置自动化测试套件验证完整性（可选）
+python3 patch_unsafeAssem.py --test
 
 # 4. 启动游戏
 wine "$AIC_GAME_DIR/AliceInCradle.exe"

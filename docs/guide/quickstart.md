@@ -57,31 +57,33 @@ x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib \
 预期结果：游戏根目录下的 `AliceInCradle.exe` 被替换为 2.5 KB 的干净引导器。
 
 ### 3.3 执行托管程序集本地修补
-运行本地修补脚本，重定向 `unsafeAssem.dll` 中的环境探测分支。
+运行自适应修补脚本，重定向 `unsafeAssem.dll` 中的环境探测分支。
+新版修补器在完成等长原位修改后，会自动计算散列并同步更新校验清单。
 
 ```bash
 python3 patch_unsafeAssem.py
 ```
 
-预期结果：终端输出如下提示，并在同目录下生成 `.orig` 备份：
+预期结果：终端输出修补与散列同步提示，并在同目录下生成 `.orig` 备份：
 ```text
 Target assembly: .../Managed/unsafeAssem.dll
-Backup created: .../Managed/unsafeAssem.dll.orig
-Successfully patched .../Managed/unsafeAssem.dll
+[OK] Created backup at .../Managed/unsafeAssem.dll.orig
+[OK] Successfully patched 25 bytes at offset 0xF9D53 in-place.
+[OK] Synchronized SHA-256 to .../StreamingAssets/_sha.txt
 ```
 
-### 3.4 重新同步文件散列表
-运行散列表同步脚本，将修补后的 DLL 哈希写回校验清单。
+### 3.4 校验文件散列表（可选）
+如需对游戏目录下全部 31 项托管组件与插件执行完整哈希复验，可运行：
 
 ```bash
 python3 update_sha.py
 ```
 
-预期结果：终端输出各文件哈希对比状态，并显示更新成功：
+预期结果：终端输出各文件哈希对比状态，并显示全部匹配：
 ```text
 [OK]      Managed/Assembly-CSharp.dll
-[UPDATED] Managed/unsafeAssem.dll
-All hashes match. _sha.txt update complete.
+[OK]      Managed/unsafeAssem.dll
+All hashes match. No updates needed.
 ```
 
 ### 3.5 启动游戏验证
@@ -112,9 +114,10 @@ _sha.txt update complete.
 1. 提示找不到目标动态库：
    请检查是否已在当前终端正确设置 `AIC_GAME_DIR` 环境变量。
 2. 启动后画面定格且按钮无样式：
-   此现象表明启动器版本过旧或哈希表未更新。请重新执行第 3.2 步与第 3.4 步。
-3. 二次启动黑屏：
-   在 Wine 下请勿开启全屏模式，建议在设置中维持窗口化运行。
+   此现象多由历史旧补丁损坏 `get_SENSITIVE` 或残留脏配置引起。
+   请使用最新自适应脚本修复并清理旧配置（详见 [常见问题 FAQ](guide/faq.md#q1)）。
+3. 二次启动黑屏或冻结：
+   请检查 Wine 配置目录并清理残留旧数据（详见 [常见问题 FAQ](guide/faq.md#q2)）。
 
 ## 6. 参考链接
 
