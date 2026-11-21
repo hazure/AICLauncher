@@ -18,7 +18,7 @@
 
 ```bash
 # Linux / Android (Termux)
-export AIC_GAME_DIR="/storage/emulated/0/Documents/AliceInCradle_ver030"
+export AIC_GAME_DIR="/path/to/AliceInCradle_ver030"
 ```
 
 ```cmd
@@ -87,10 +87,14 @@ All hashes match. No updates needed.
 ```
 
 ### 3.5 启动游戏验证
-在 Wine 或目标转译容器中启动新生成的可执行程序。
+在 Wine 或目标转译容器中启动游戏：
 
 ```bash
+# 方式 A：纯净启动（所有命令行参数原样传递）
 wine "$AIC_GAME_DIR/AliceInCradle.exe"
+
+# 方式 B：通过外部启动器（针对 Android / 转译容器自动注入 Box64、DXVK 稳定参数）
+./launcher.sh
 ```
 
 预期结果：游戏跳过虚拟机报错弹窗，平滑进入初始年龄确认与主标题场景。

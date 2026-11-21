@@ -27,8 +27,8 @@
 - **目标环境**：Linux (Wine / Proton) 与 Android 转译容器 (Termux-X11 / Winlator / Mobox)
 
 ### 2.2 核心方案特性
-- **外层 Themida 壳剥离**：编写零 C 运行时（Zero-CRT）依赖的 2.5 KB 原生 Win64 极简引导程序（`stub_perfect.c`），直调 `UnityPlayer.dll!UnityMain2`，彻底解除加壳工具的虚拟化弹窗与环境误报；
-- **内层 CIL 字节码自适应重定向**：采用纯 Python 基于上下文特征码与 CLI 元数据定位 `unsafeAssem.dll` 中 `XX.IN::Awake()` 的检测分支，实现 25 字节等长原位改写（In-place Patching），彻底解除对硬编码物理偏移的脆弱依赖；
+- **外层 Themida 壳剥离**：编写零 C 运行时（Zero-CRT）依赖的原生 Win64 极简引导程序（`stub_perfect.c`），遵循单一职责原则，直调 `UnityPlayer.dll!UnityMain2`，完整透明透传外部命令行参数并增加显式错误弹窗拦截；转译层参数配置与分辨率管理已完全解耦至外部 `launcher.sh` 脚本；
+- **内层 CIL 字节码动态重定向**：采用纯 Python 基于上下文特征码与 ECMA-335 CLI 元数据动态解析 `unsafeAssem.dll` 中 `XX.IN::Awake()` 的 UserString Token，结合原子文件替换（`patch_binary_atomic`）实现 25 字节等长原位改写，具备严格的写入前特征校验与熔断机制，确保文件尺寸绝对不变且杜绝半写入损坏；
 - **哈希散列表自动联动**：修补器内置重新计算 SHA-256 并自动同步至 `StreamingAssets/_sha.txt`，亦可搭配 `update_sha.py` 全量核验，保证原生 `SHAChecker` 毫秒级通过；
 - **关键逻辑物理隔离**：严格隔离反虚机逻辑与非相关功能，严禁修改游戏内容分级属性（`get_SENSITIVE`），杜绝 Mono JIT 字节码越界校验异常。
 
@@ -65,7 +65,7 @@
 为消除路径硬编码，各工具优先读取 `AIC_GAME_DIR` 环境变量：
 ```bash
 # Linux / Android (Termux)
-export AIC_GAME_DIR="/storage/emulated/0/Documents/AliceInCradle_ver030"
+export AIC_GAME_DIR="/path/to/AliceInCradle_ver030"
 
 # Windows (CMD)
 set AIC_GAME_DIR=D:\Games\AliceInCradle_ver030
@@ -77,20 +77,24 @@ set AIC_GAME_DIR=D:\Games\AliceInCradle_ver030
 x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib -Wl,-e,WinMainCRTStartup \
   -o "$AIC_GAME_DIR/AliceInCradle.exe" src/stub_perfect.c -lkernel32 -luser32
 
-# 2. 执行本地托管代码自适应重定向（自动同步 _sha.txt）
+# 2. 执行本地托管代码动态重定向（自动同步 _sha.txt，采用原子化写入）
 python3 patch_unsafeAssem.py
 
 # 3. 运行内置自动化测试套件验证完整性（可选）
 python3 patch_unsafeAssem.py --test
 
-# 4. 启动游戏
+# 4. 启动游戏（原生 Wine 或搭配 external launcher 启动）
+# 方式 A：直接启动（纯净透传参数）
 wine "$AIC_GAME_DIR/AliceInCradle.exe"
+
+# 方式 B：使用 launcher.sh（针对 Android / 转译容器优化 Box64、DXVK 与 Mesa 驱动参数）
+./launcher.sh
 ```
 *详细步骤与异常排查请参阅 [快速上手文档](docs/guide/quickstart.md)。*
 
 ---
 
-## 5. 底层性能调优与驱动搭配指南（保稳定、控开销、提准度）
+## 5. 底层性能调优与驱动搭配指南（解耦至 launcher.sh）
 
 ### 5.1 Adreno 730 推荐配置
 针对搭载高通 Adreno 730 GPU 的设备（如骁龙 8+ Gen 1、8 Gen 1），推荐以下黄金组合：
@@ -102,27 +106,21 @@ wine "$AIC_GAME_DIR/AliceInCradle.exe"
 | **Box64 Dynarec** | `0.3.0+` | 采用保守基本块生成，控制编译 CPU 尖峰开销 |
 | **渲染模式** | 独占全屏 (Native) | 保持与容器原生分辨率 1:1 输出 |
 
-### 5.2 启动桩环境参数注入与动态分辨率软编码接管
-在最新版本的极简引导启动器（`src/stub_perfect.c`）中，程序已在调用 Unity 引擎前动态注入环境变量并软编码接管显示模式（仅基于 Win32 `KERNEL32.dll` 与 `USER32.dll`，无任何 CRT 依赖）：
+### 5.2 职责解耦：外部启动脚本 `launcher.sh`
+根据单一职责原则（SRP），原先硬编码在 C 引导桩中的转译层环境参数已彻底移出至独立的外部启动脚本 `launcher.sh`，保证 Windows PE 二进制文件本身的纯净与跨平台通用性：
 - `BOX64_DYNAREC_BIGBLOCK=1`：放弃激进的 BIGBLOCK=2，改用保守基本块重编译策略，避免翻译缓存未命中引发的 CPU 异常尖峰与瞬时卡顿；
 - `BOX64_DYNAREC_SAFEFLAGS=1`：优化状态标志寄存器模拟，兼顾指令安全性与分支效率；
 - `BOX64_DYNAREC_ALIGNED_ATOMICS=1`：强制多线程原子操作内存对齐，避免 Unity JobSystem 多线程锁竞争异常；
 - `BOX64_DYNAREC_STRONGMEM=1`：模拟强内存模型（Strong Memory Model），在 ARM 弱内存序硬件下保障内存屏障与锁序，杜绝高负载死锁；
 - `DXVK_ASYNC=1`：开启非阻塞管线异步编译，消除初次着色器构建卡顿；
 - `MESA_SHADER_CACHE=1`：开启 Mesa 底层磁盘持久化着色器缓存；
-- `MESA_SHADER_CACHE_DIR` 与 `DXVK_STATE_CACHE_PATH`：启动时通过 `GetCurrentDirectoryA` 动态获取游戏目录，自动创建并绑定 `shader_cache` 目录，确保着色器与管线状态缓存获得绝对持久化存储，杜绝冷启动与重复编译阻塞；
-- **动态分辨率软编码与无边框窗口接管**：通过 `GetSystemMetrics(SM_CXSCREEN)` 与 `GetSystemMetrics(SM_CYSCREEN)` 动态获取 Wine 容器真实分辨率，严禁硬编码静态数值，自动拼接 `-screen-width <宽> -screen-height <高> -popupwindow -screen-fullscreen 0` 传递给 Unity 引擎，从启动源头彻底绕开底层 DXVK 交换链重建风险。
-
-> [!WARNING]
-> **启动器已动态接管显示模式并锁定为无边框窗口，请勿在游戏内切换全屏，以免触发移动端转译层的图形上下文丢失（Device Lost）崩溃。**
+- `MESA_SHADER_CACHE_DIR` 与 `DXVK_STATE_CACHE_PATH`：自动创建并绑定 `shader_cache` 目录，确保着色器与管线状态缓存获得绝对持久化存储；
+- **命令行参数完整透传**：`AliceInCradle.exe` 作为纯净 Thin Stub，完整解析并透传用户传入的全部命令行参数，绝不粗暴丢弃。
 
 ### 5.3 前端配置与底层注入优先级说明
-本启动器严格遵循“只补位不覆盖”（Fallback-only）的设计哲学：
-在注入任何环境变量（如 `BOX64_DYNAREC_SAFEFLAGS`、`MESA_SHADER_CACHE`、`DXVK_ASYNC` 等）前，程序首先调用 `GetEnvironmentVariableA` 检查当前进程上下文。
-如果用户在 Winlator 界面设置过相关参数，本启动器将完全尊重用户配置，绝对禁止强行覆盖；
-仅在用户未配置时，注入本补丁测试过的最佳稳定参数。
-
-对于 `MESA_SHADER_CACHE_DIR` 和 `DXVK_STATE_CACHE_PATH` 缓存路径，启动桩通过 `GetCurrentDirectoryA` 动态获取游戏当前的绝对物理路径再拼接缓存目录名，绝对禁止写死如 `C:\` 或 `Z:\` 等特定挂载点，确保跨不同容器挂载方式下的绝对兼容。
+`launcher.sh` 严格遵循“只补位不覆盖”（Fallback-only）的设计哲学：
+在注入任何环境变量（如 `BOX64_DYNAREC_SAFEFLAGS`、`MESA_SHADER_CACHE`、`DXVK_ASYNC` 等）前，脚本首先检查当前环境变量是否存在。
+如果用户在 Winlator 界面设置过相关参数，将完全尊重用户配置，绝不强行覆盖；仅在用户未配置时补充稳定参数。
 
 ### 5.4 底层性能与稳定性说明
 在转译层（Box64 / Wine / DXVK），性能瓶颈往往会引发 CPU 异常开销，进而导致移动端温控降频与引擎崩溃。

@@ -18,81 +18,90 @@
 完整 C 源码位于 `src/stub_perfect.c`：
 
 ```c
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-// 声明标准字符串指针类型
 typedef int (*UnityMain2_t)(HINSTANCE, HINSTANCE, LPSTR, int);
 
-// 只补位不覆盖（Fallback-only）：优先保留前端自定义设置
-static void set_env_if_missing(const char *name, const char *val) {
-    if (GetEnvironmentVariableA(name, NULL, 0) == 0) {
-        SetEnvironmentVariableA(name, val);
-    }
-}
-
+/*
+ * Thin Launcher Stub:
+ * 遵循单一职责原则（SRP）：
+ * 1. 锚定工作目录至当前进程所在目录；
+ * 2. 动态加载 UnityPlayer.dll 并获取 UnityMain2 导出函数；
+ * 3. 完整透传系统原始命令行参数（跳过自身 exe 路径，保留用户所有参数）；
+ * 4. 出现错误时弹出明确的错误对话框（彻底消灭黑盒静默退出）。
+ * 
+ * 环境变量注入（Box64/Mesa/DXVK）与显示分辨率配置已完全交还外部启动脚本 launcher.sh。
+ */
 void WinMainCRTStartup(void) {
-    // 锚定工作目录至当前程序所在目录
     SetCurrentDirectoryW(L".");
 
-    // 动态注入环境参数（只补位不覆盖，保稳定、控开销、提准度）
-    set_env_if_missing("BOX64_DYNAREC_BIGBLOCK", "1");
-    set_env_if_missing("BOX64_DYNAREC_SAFEFLAGS", "1");
-    set_env_if_missing("BOX64_DYNAREC_ALIGNED_ATOMICS", "1");
-    set_env_if_missing("BOX64_DYNAREC_STRONGMEM", "1");
-    set_env_if_missing("DXVK_ASYNC", "1");
-    set_env_if_missing("MESA_SHADER_CACHE", "1");
-
-    // 绝对持久化：动态解析当前路径并绑定专属目录，绝不写死盘符
-    char cache_dir[MAX_PATH];
-    DWORD len = GetCurrentDirectoryA(MAX_PATH, cache_dir);
-    if (len > 0 && len + 14 < MAX_PATH) {
-        if (cache_dir[len - 1] != '\\') {
-            cache_dir[len++] = '\\';
-        }
-        const char sub[] = "shader_cache";
-        for (DWORD i = 0; i < sizeof(sub); i++) {
-            cache_dir[len + i] = sub[i];
-        }
-        CreateDirectoryA(cache_dir, NULL);
-        set_env_if_missing("MESA_SHADER_CACHE_DIR", cache_dir);
-        set_env_if_missing("DXVK_STATE_CACHE_PATH", cache_dir);
-    }
-
-    // 动态装载官方无壳 Unity 引擎核心
     HMODULE hUnity = LoadLibraryW(L"UnityPlayer.dll");
     if (!hUnity) {
+        DWORD err = GetLastError();
+        char msg[128];
+        char code[16];
+        int idx = 0;
+        const char prefix[] = "Fatal: Failed to load UnityPlayer.dll (ErrorCode: ";
+        for (int i = 0; prefix[i]; i++) {
+            msg[idx++] = prefix[i];
+        }
+
+        DWORD tmp = err;
+        int c_idx = 0;
+        if (tmp == 0) {
+            code[c_idx++] = '0';
+        } else {
+            while (tmp > 0 && c_idx < 10) {
+                code[c_idx++] = (char)('0' + (tmp % 10));
+                tmp /= 10;
+            }
+        }
+        for (int i = c_idx - 1; i >= 0; i--) {
+            msg[idx++] = code[i];
+        }
+        msg[idx++] = ')';
+        msg[idx] = '\0';
+
+        MessageBoxA(NULL, msg, "AliceInCradle Launcher Error", MB_ICONERROR | MB_OK);
         ExitProcess(1);
     }
 
-    // 解析引擎主入口点函数地址
-    UnityMain2_t UnityMain2 = 
-        (UnityMain2_t)GetProcAddress(hUnity, "UnityMain2");
-    if (!UnityMain2) {
+    UnityMain2_t pUnityMain2 = (UnityMain2_t)GetProcAddress(hUnity, "UnityMain2");
+    if (!pUnityMain2) {
+        MessageBoxA(NULL, "Fatal: Export 'UnityMain2' not found in UnityPlayer.dll", "AliceInCradle Launcher Error", MB_ICONERROR | MB_OK);
         ExitProcess(2);
     }
 
-    // 动态分辨率软编码与无边框窗口接管（绕开 DXVK 交换链重建崩溃）
-    int screen_w = GetSystemMetrics(SM_CXSCREEN);
-    int screen_h = GetSystemMetrics(SM_CYSCREEN);
+    /* 正确解析并透传 Command Line 参数（跳过 argv[0] 可执行文件路径） */
+    LPSTR lpCmdLine = GetCommandLineA();
+    if (lpCmdLine) {
+        if (*lpCmdLine == '"') {
+            lpCmdLine++;
+            while (*lpCmdLine && *lpCmdLine != '"') lpCmdLine++;
+            if (*lpCmdLine == '"') lpCmdLine++;
+        } else {
+            while (*lpCmdLine && *lpCmdLine > ' ') lpCmdLine++;
+        }
+        while (*lpCmdLine && *lpCmdLine <= ' ') lpCmdLine++;
+    } else {
+        lpCmdLine = "";
+    }
 
-    char cmdline[256];
-    wsprintfA(cmdline,
-        "-screen-width %d -screen-height %d -popupwindow -screen-fullscreen 0",
-        screen_w, screen_h);
-
-    // 传递动态命令行并启动引擎
-    int ret = UnityMain2(
-        GetModuleHandleW(NULL), NULL, cmdline, SW_SHOW);
-
+    int ret = pUnityMain2(GetModuleHandleW(NULL), NULL, lpCmdLine, SW_SHOW);
     ExitProcess(ret);
 }
 ```
 
-## 4. 动态分辨率与显示模式接管
+## 4. 单一职责与环境解耦说明
 
-在移动端 Android 转译环境（Wine / Box64 / DXVK）下，游戏内部切换全屏/窗口化或变更分辨率时，会触发 DXVK 底层 Vulkan Swapchain 的重建。
-由于移动 GPU（如 Adreno 系列）驱动对交换链频繁重置较为敏感，极易引发 `VK_ERROR_DEVICE_LOST` 异常并导致引擎崩溃。
-本启动桩通过调用 `GetSystemMetrics` 动态获取当前容器宿主分辨率，软编码注入 `-screen-width`、`-screen-height`、`-popupwindow` 与 `-screen-fullscreen 0`。
+在软件工程中，引导桩（Loader / Stub）的核心职责应严格限定为：**定位引擎运行时、安全加载模块、透传原始参数并移交控制流**。
+
+早期的原型尝试在 C 引导桩内部混入转译层专属参数（如 `BOX64_DYNAREC_*`）与窗口尺寸软编码，但这造成了严重的职责越权与代码污染：
+1. **跨平台兼容破裂**：在标准 Windows x86-64 或 Proton 环境下，注入 ARM 相关的 Box64 变量毫无意义；
+2. **丢失外部参数**：硬编码命令行会导致用户与自动化测试传入的引擎参数（如 `-logFile`、`-batchmode`）被静默吞掉。
+
+新版架构中，引导程序保持纯净 Thin Stub 属性，而移动端容器环境适配与分辨率探测已统一交由外部启动脚本 `launcher.sh` 负责。
 通过在启动器层面强制锁定无边框窗口化，彻底消除了游戏运行期间交换链被重构的风险。
 
 ## 5. 编译产物对比
