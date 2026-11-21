@@ -1,0 +1,21 @@
+LIBRARY kernel32.dll
+EXPORTS
+    ExitProcess=MyExitProcess @1
+    TerminateProcess=MyTerminateProcess @2
+    CreateFileA=kernel32.CreateFileA
+    CreateFileW=kernel32.CreateFileW
+    ReadFile=kernel32.ReadFile
+    WriteFile=kernel32.WriteFile
+    GetModuleHandleA=kernel32.GetModuleHandleA
+    GetModuleHandleW=kernel32.GetModuleHandleW
+    GetProcAddress=kernel32.GetProcAddress
+    LoadLibraryA=kernel32.LoadLibraryA
+    LoadLibraryW=kernel32.LoadLibraryW
+    GetLastError=kernel32.GetLastError
+    CloseHandle=kernel32.CloseHandle
+    GetCurrentProcess=kernel32.GetCurrentProcess
+    GetCurrentProcessId=kernel32.GetCurrentProcessId
+    GetSystemTimeAsFileTime=kernel32.GetSystemTimeAsFileTime
+    QueryPerformanceCounter=kernel32.QueryPerformanceCounter
+    Sleep=kernel32.Sleep
+    GetTickCount=kernel32.GetTickCount

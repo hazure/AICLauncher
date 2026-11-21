@@ -1,0 +1,31 @@
+LIBRARY user32.dll
+EXPORTS
+    SetWindowTextW=MySetWindowTextW @1
+    SetWindowTextA=MySetWindowTextA @2
+    PostQuitMessage=MyPostQuitMessage @3
+    CreateWindowExW=user32.CreateWindowExW
+    CreateWindowExA=user32.CreateWindowExA
+    RegisterClassW=user32.RegisterClassW
+    RegisterClassA=user32.RegisterClassA
+    ShowWindow=user32.ShowWindow
+    GetMessageW=user32.GetMessageW
+    GetMessageA=user32.GetMessageA
+    TranslateMessage=user32.TranslateMessage
+    DispatchMessageW=user32.DispatchMessageW
+    DispatchMessageA=user32.DispatchMessageA
+    DefWindowProcW=user32.DefWindowProcW
+    DefWindowProcA=user32.DefWindowProcA
+    PeekMessageW=user32.PeekMessageW
+    PeekMessageA=user32.PeekMessageA
+    SetWindowPos=user32.SetWindowPos
+    GetSystemMetrics=user32.GetSystemMetrics
+    LoadCursorW=user32.LoadCursorW
+    LoadCursorA=user32.LoadCursorA
+    LoadIconW=user32.LoadIconW
+    LoadIconA=user32.LoadIconA
+    EndDialog=user32.EndDialog
+    DestroyWindow=user32.DestroyWindow
+    SendMessageW=user32.SendMessageW
+    SendMessageA=user32.SendMessageA
+    MessageBoxA=user32.MessageBoxA
+    MessageBoxW=user32.MessageBoxW

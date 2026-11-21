@@ -1,0 +1,15 @@
+# Ignore proprietary game binaries
+*.dll
+*.bak
+*.orig
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS / Editor files
+.DS_Store
+*.swp
+*~
+*.exe
