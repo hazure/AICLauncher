@@ -115,7 +115,8 @@ tests/
   - 编译选项加入 `-nostdlib`，完全切断任何 C 运行时库；
   - 入口函数指定为自定义的 `WinMainCRTStartup`；
   - 仅链接系统底层 `KERNEL32.dll`；
-  - 显式保证 x86-64 ABI 的 16 字节栈对齐要求，并为 `UnityMain2` 预留 32 字节 Shadow Space。
+  - 显式保证 x86-64 ABI 的 16 字节栈对齐要求，并为 `UnityMain2` 预留 32 字节 Shadow Space；
+  - **重要参数类型规范**：通过对 `UnityPlayer.dll`（RVA `0x180817440`）深入反编译，确认其内部直接将第三参数传给 `SHELL32.dll!CommandLineToArgvW` 进行宽字符分词。因此该参数必须严格声明为 `LPWSTR` 并传入 `GetCommandLineW()`。若错误传入 ANSI 单字节字符串（`GetCommandLineA()`），相邻 ASCII 字节将被解释为双字节 Unicode 字符（例如 `"AliceInCradle.exe"` 会被解析为乱码字符 `'汁捩䥥䍮慲汤...'`），引发 Unity 启动参数解析器越界或异常，导致窗口消息循环与输入事件挂起。
 - **结果**：编译产物体积仅为 2.5 KB，没有任何第三方或高版本 CRT 依赖，具备最高的跨容器与跨 Wine 版本兼容性。
 
 ---
@@ -128,6 +129,27 @@ tests/
 3. 将 `monodis` 输出中获取到的 Method RVA（如 `0xfb88c` 与 `0x13ffd0`）通过节区映射公式精确换算为物理文件偏移：
    $$\text{FileOffset} = \text{RVA} - \text{Section.VirtualAddress} + \text{Section.PointerToRawData}$$
 4. 打印该偏移处的十六进制指令，与反汇编字节严格比对，确保每一处 Patch 均精准命中目标方法边界，不污染邻近元数据。
+
+---
+
+### 3.6 方案 F：标题画面状态机时序与异步哈希校验死锁（`SceneTitleTemp` 与 `SHAChecker`）
+
+在游戏绕过 Themida 与初始 VM 检测顺利进入 Unity 主循环后，若在初次启动时遇到标题画面无响应、仅显示文本而无按钮样式纹理（形如 Wine Mono 基础渲染外观）且无法互动的现象，经深层逆向定位出以下机制：
+1. **敏感模式提示框时序（`STATE.SENSITIVE_ANNOUNCE`）**：
+   在首次启动（`first_startup == true`）时，`SceneTitleTemp::initSensitiveAnnounce()` 构建提示对话框，并将 `DsBlack` 的透明度初始化为 0。随后在 `runIRD()` 循环中，游戏每帧推进计时器 `this.t` 并轮询 `progressShaChecker()`。
+2. **异步哈希校验阻塞陷阱**：
+   `SHAChecker::progress(int32 time)` 在执行文件校验过程中恒返回 `true`（表示仍在进行校验），直至全部文件哈希验证通过后才返回 `false`。
+   在历史试验中，若有人试图通过直接向 `unsafeAssem.dll` 中 `SHAChecker::progress` 写入 `17 2a`（`ldc.i4.1; ret`）来“跳过”校验，会导致其无论何时均返回 `true`。
+   在 `runIRD()` 的状态跳转逻辑中：
+   ```csharp
+   bool sha_in_progress = this.progressShaChecker(loc3 ? 1 : 0);
+   if (loc1 && !sha_in_progress) {
+       this.changeState(STATE.TOP); // 只有校验结束才允许进入主菜单
+   }
+   ```
+   若 `progress` 恒返回 `true`，状态机将无限期阻塞在 `STATE.SENSITIVE_ANNOUNCE`，按钮纹理资源由于未进入主准备阶段而未完成加载（仅显示最初的文本网格），造成渲染停滞与输入假死。
+3. **正确解法**：
+   坚决不破坏 `unsafeAssem.dll` 内 `SHAChecker` 的任何指令与方法头结构，而是通过外部工具 `update_sha.py` 将 `StreamingAssets/_sha.txt` 中记录的预期哈希同步更新为被合法补丁后的实际文件哈希。原生校验逻辑在首帧毫秒级即可自然通过并返回 `false`，状态机平滑进入 `STATE.TOP`。
 
 ---
 

@@ -89,7 +89,7 @@ int UnityMain2(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, in
   1. 调用 `SetCurrentDirectoryW(L".")` 确保工作目录锚定于游戏根目录。
   2. 调用 `LoadLibraryW(L"UnityPlayer.dll")` 动态装载无壳的官方 Unity 核心库。
   3. 通过 `GetProcAddress` 获取 `UnityMain2` 函数指针。
-  4. 传入 `GetModuleHandleW(NULL)` 与 `GetCommandLineA()` 调用该函数，直接启动 Unity 引擎。
+  4. 传入 `GetModuleHandleW(NULL)` 与宽字符命令行 `GetCommandLineW()` 调用该函数，直接启动 Unity 引擎（必须使用宽字符以配合内部 `CommandLineToArgvW` 解析）。
   5. 将编译出的纯净 PE 程序重命名为 `AliceInCradle.exe`。
 - **效果**：
   直接绕过外层 Themida 壳及其全部反虚拟机代码，执行体积从 12.35 MB 缩减至 2.5 KB，且消除任何加壳工具在非 Windows 物理机环境下的误报与挂起。
