@@ -45,15 +45,22 @@
 
 ## 3. 运行环境与补丁工具问题
 
-### Q3: 运行修补脚本报错提示版本不兼容或特征不匹配？
+### Q3: 运行修补脚本报错提示版本不兼容或特征不匹配（第三方 Mod 冲突）？
 - **故障现象**：
-  执行 `python3 patch_unsafeAssem.py` 触发 `IncompatibleVersionError` 熔断。
+  执行 `python3 patch_unsafeAssem.py` 触发 `IncompatibleVersionError` 或 `SecurityVerificationError` 熔断。
 - **原因分析**：
-  补丁器内置了严格的安全熔断机制与版本探针。
-  若检测到目标 DLL 文件已被第三方工具篡改，脚本将拒绝盲目覆写。
+  补丁器内置了严格的安全熔断机制与特征码上下文校验。
+  若检测到目标 DLL 文件已被第三方工具或 Mod 篡改（指令链被改写或换行偏移位移），脚本将拒绝盲目覆写以防损坏程序集。
 - **解决方案**：
-  1. 从原始干净安装包中恢复官方原版 `unsafeAssem.dll`；
-  2. 重新运行最新版 `patch_unsafeAssem.py` 执行自适应修补。
+  1. 若您应用了第三方 Mod/汉化/功能补丁，导致脚本无法找到特征码或触发 `SecurityVerificationError`，请先移除 Mod 打上本 VM 补丁，再重新覆盖 Mod（需确认 Mod 未破坏关键指令上下文）。
+  2. 若 Mod 彻底重写或深度改动了相关方法，无需执行字节码改写，只需强制重新计算并同步校验哈希清单，可增加 `--force-skip-sha` 参数跳过原始特征码校验：
+     ```bash
+     python3 patch_unsafeAssem.py --force-skip-sha
+     ```
+  3. 若目标 DLL 位于独立调试包或外部路径下，支持通过 `--target` 显式指定：
+     ```bash
+     python3 patch_unsafeAssem.py --target "/path/to/debug/unsafeAssem.dll" --force-skip-sha
+     ```
 
 ### Q4: 终端运行脚本提示找不到目标动态库？
 - **故障现象**：

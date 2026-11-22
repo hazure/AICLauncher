@@ -80,6 +80,13 @@ x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib -Wl,-e,WinMainCRTStartup \
 # 2. 执行本地托管代码动态重定向（自动同步 _sha.txt，采用原子化写入）
 python3 patch_unsafeAssem.py
 
+# 进阶参数：路径独立性与第三方 Mod 深度兼容
+# A. 手动指定目标 DLL 路径（支持绝对路径/调试包目录）：
+python3 patch_unsafeAssem.py --target "/path/to/debug/unsafeAssem.dll"
+
+# B. 第三方 Mod 深度兼容（跳过指令特征校验，强制重算并同步 _sha.txt）：
+python3 patch_unsafeAssem.py --target "/path/to/debug/unsafeAssem.dll" --force-skip-sha
+
 # 3. 运行内置自动化测试套件验证完整性（可选）
 python3 patch_unsafeAssem.py --test
 
@@ -137,7 +144,25 @@ dxvk.gpl = true
 
 ---
 
-## 6. 仓库结构说明
+## 6. 常见问题（FAQ）
+
+### Q1: 第三方 Mod / 汉化 / 功能调试补丁导致特征码失效或熔断报错？
+若您应用了第三方 Mod/汉化/功能补丁，导致脚本无法找到特征码或触发 `SecurityVerificationError`，请先移除 Mod 打上本 VM 补丁，再重新覆盖 Mod（需确认 Mod 未破坏关键指令上下文）。
+
+对于彻底重写或替换了相关检测方法的深度 Mod，可使用 `--force-skip-sha` 参数跳过字节码特征校验，直接将当前 Mod 程序集的真实 SHA-256 强制重算并覆盖同步至 `StreamingAssets/_sha.txt`：
+```bash
+python3 patch_unsafeAssem.py --force-skip-sha
+```
+
+### Q2: 自定义调试包或外部路径支持？
+脚本具备完全的路径独立性。如果将 DLL 放在特定调试包路径下（如 `/storage/emulated/0/Documents/ALC功能调试包/unsafeAssem.dll`），支持通过命令行 `--target` 手动指定目标 DLL 路径：
+```bash
+python3 patch_unsafeAssem.py --target "/storage/emulated/0/Documents/ALC功能调试包/unsafeAssem.dll" --force-skip-sha
+```
+
+---
+
+## 7. 仓库结构说明
 
 ```
 alice-in-cradle-030-vm-patch/
@@ -149,7 +174,8 @@ alice-in-cradle-030-vm-patch/
 │   ├── bypass/                           # 绕过实现与字节码重定向工程细节
 │   └── guide/                            # 快速上手、驱动最佳化、多编译器与 FAQ
 ├── src/
-│   └── stub_perfect.c                    # 纯净 Win64 启动器原生 C 源码（Zero-CRT，注入性能环境变量）
+│   └── stub_perfect.c                    # 纯净 Win64 启动器原生 C 源码（Zero-CRT，参数透传 Thin Stub）
+├── launcher.sh                           # 外部容器环境配置与启动器（管理 Box64 / DXVK / Mesa 驱动）
 ├── tests/                                # 历史探索实验套件与逆向复盘工具
 │   ├── 01_asset_suppression_attempts/    # 方案A: 资产层报错抑制实验
 │   ├── 02_dll_hijacking_attempts/        # 方案B: DLL 劫持侧载实验
@@ -164,32 +190,32 @@ alice-in-cradle-030-vm-patch/
 
 ---
 
-## 7. 法律声明、使用守则与正版支持倡议
+## 8. 法律声明、使用守则与正版支持倡议
 
-### 7.1 正版软件支持倡议
+### 8.1 正版软件支持倡议
 本项目坚定支持软件原创性与知识产权保护。
 本补丁的存在绝非为盗版提供便利，我们强烈呼吁所有研究者与玩家通过官方合法渠道（如 DLsite、Steam 或官方赞助渠道）购买并持有正版游戏授权。请以实际行动支持独立开发者与创作团队，只有健康的商业反馈才能保障优质作品的长久迭代。
 
-### 7.2 合规使用准则
+### 8.2 合规使用准则
 本项目仅供计算机系统原理研究、操作系统兼容性分析及合法持有正版授权用户的合理硬件扩展使用。
 严禁将本项目中的任何技术细节、工具或补丁用于商业牟利、未经授权的游戏二次打包分发、黑客对抗、外挂制作或其他侵害权利人合法权益的行为。技术的发展应当服务于正面建设与知识共享。
 
-### 7.3 官方支持免责声明
+### 8.3 官方支持免责声明
 **严禁向游戏开发团队或官方客服渠道提交由于使用本补丁所引发的任何游戏异常、渲染缺陷、逻辑错误或崩溃日志。**
 开发团队不承担在非官方指定硬件及转译/虚拟机环境下提供技术支持的义务。任何因环境兼容性绕过导致的存档损坏、性能波动、图形伪影及系统不稳定性，均由补丁使用者自行承担全部责任与后果。
 
-### 7.4 仓库维权与即刻下线机制
+### 8.4 仓库维权与即刻下线机制
 维护者充分尊重软件著作权人的知识产权与合法诉求。
 **若收到游戏开发团队、发行方或相关合法权利人的官方通告、版权警示或下架请求，本仓库将会在第一时间无条件永久删除全部内容，并彻底关闭项目不再重新开放。**
 
-### 7.5 维护者终局寄语
+### 8.5 维护者终局寄语
 技术的真正价值在于打破平台壁垒、加深对底层系统的认知并驱动正面发展，而非对抗与破坏。
 请珍惜社区开发与研究成果，保持清醒与克制。
 **请用户们尊重开发者的劳动成果，尊重正版商业逻辑，尊重人类。**
 
 ---
 
-## 8. 项目边界与问题反馈声明
+## 9. 项目边界与问题反馈声明
 
 本项目（vm_patch）的核心目标是解除游戏在 VM/非物理机环境下的启动拦截，消除转译层的异常 CPU 开销与线程死锁，并保证底层 PE/IL 与图形管线的极致稳定性。
 

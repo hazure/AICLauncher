@@ -350,14 +350,17 @@ def sync_sha_file(dll_path, new_hash):
     """Synchronizes the updated assembly SHA-256 with StreamingAssets/_sha.txt atomically."""
     base_dir = os.path.dirname(os.path.abspath(dll_path))
     candidates = [
+        os.path.join(base_dir, "_sha.txt"),
+        os.path.join(base_dir, "StreamingAssets", "_sha.txt"),
         os.path.join(base_dir, "..", "StreamingAssets", "_sha.txt"),
         os.path.join(base_dir, "..", "..", "StreamingAssets", "_sha.txt"),
-        os.path.join(base_dir, "StreamingAssets", "_sha.txt"),
+        os.path.join(base_dir, "..", "_sha.txt"),
     ]
     env_dir = os.environ.get("AIC_GAME_DIR")
     if env_dir:
         candidates.append(os.path.join(env_dir, "AliceInCradle_Data", "StreamingAssets", "_sha.txt"))
         candidates.append(os.path.join(env_dir, "StreamingAssets", "_sha.txt"))
+        candidates.append(os.path.join(env_dir, "_sha.txt"))
 
     sha_file = None
     for c in candidates:
@@ -413,17 +416,27 @@ def sync_sha_file(dll_path, new_hash):
         print(f"[Notice] unsafeAssem.dll entry not found in {sha_file}.")
         return False
 
-def patch_file(dll_path, auto_sync_sha=True):
+def patch_file(dll_path, auto_sync_sha=True, force_skip_sha=False):
     """
-    Executes atomic in-place patching adhering strictly to the zero-shift invariant:
-      - Uses temporary file and atomic os.replace.
-      - Replaces exactly 25 bytes with 25 bytes.
-      - Verifies pre-write bytes with circuit breaker.
+    Executes in-place patching adhering strictly to the zero-shift invariant.
+    If force_skip_sha is True, skips bytecode scanning/patching and directly
+    recalculates and synchronizes SHA-256 for modded assemblies.
     """
     if not os.path.isfile(dll_path):
         raise FileNotFoundError(f"Target assembly does not exist: {dll_path}")
 
     print(f"Target assembly: {dll_path}")
+
+    if force_skip_sha:
+        print("[Notice] --force-skip-sha active: Skipping bytecode patching and verification.")
+        new_sha = compute_sha256(dll_path)
+        print(f"[OK] Assembly SHA-256: {new_sha}")
+        synced = sync_sha_file(dll_path, new_sha)
+        if not synced:
+            print("[Warning] Could not locate StreamingAssets/_sha.txt to synchronize.")
+            return False
+        print(f"[OK] Force synchronized SHA-256 manifest for: {dll_path}")
+        return True
 
     with open(dll_path, "rb") as f:
         dll_bytes = f.read()
@@ -456,6 +469,9 @@ def resolve_target_dll(cli_arg=None):
         if os.path.isfile(cli_arg) and os.access(cli_arg, os.R_OK):
             return os.path.abspath(cli_arg)
         if os.path.isdir(cli_arg):
+            cand0 = os.path.join(cli_arg, "unsafeAssem.dll")
+            if os.path.isfile(cand0) and os.access(cand0, os.R_OK):
+                return os.path.abspath(cand0)
             cand1 = os.path.join(cli_arg, "AliceInCradle_Data", "Managed", "unsafeAssem.dll")
             if os.path.isfile(cand1) and os.access(cand1, os.R_OK):
                 return os.path.abspath(cand1)
@@ -622,6 +638,16 @@ def main():
         help="Path to unsafeAssem.dll or AliceInCradle game folder."
     )
     parser.add_argument(
+        "--target",
+        dest="target_opt",
+        help="Explicit path to unsafeAssem.dll or AliceInCradle game folder (supports debug/mod directories)."
+    )
+    parser.add_argument(
+        "--force-skip-sha",
+        action="store_true",
+        help="Skip bytecode patching and verification; force recalculate and synchronize SHA-256 to _sha.txt for third-party modded assemblies."
+    )
+    parser.add_argument(
         "--test", "-t",
         action="store_true",
         help="Run built-in test suite and verify invariants."
@@ -638,17 +664,22 @@ def main():
         success = run_self_tests()
         sys.exit(0 if success else 1)
 
-    target_path = resolve_target_dll(args.target)
+    target_input = args.target_opt if args.target_opt else args.target
+    target_path = resolve_target_dll(target_input)
     if not target_path:
         print("[Error] Target unsafeAssem.dll could not be located.")
         print("Please configure the AIC_GAME_DIR environment variable:")
         print("  export AIC_GAME_DIR=/path/to/AliceInCradle_ver030")
-        print("Or specify the DLL file or directory explicitly:")
-        print(f"  python3 {sys.argv[0]} /path/to/unsafeAssem.dll")
+        print("Or specify the DLL file or directory explicitly via --target:")
+        print(f"  python3 {sys.argv[0]} --target /path/to/unsafeAssem.dll")
         sys.exit(1)
 
     try:
-        success = patch_file(target_path, auto_sync_sha=(not args.no_sha))
+        success = patch_file(
+            target_path,
+            auto_sync_sha=(not args.no_sha),
+            force_skip_sha=args.force_skip_sha
+        )
         sys.exit(0 if success else 1)
     except (IncompatibleVersionError, SecurityVerificationError, RuntimeError) as e:
         print(f"[Error] {e}")
