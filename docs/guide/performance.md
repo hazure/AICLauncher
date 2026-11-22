@@ -9,36 +9,32 @@
 ## 2. 硬件平台与黄金组合
 
 ### 2.1 Adreno 730 推荐配置
-针对搭载高通 Adreno 730 GPU 的设备（如骁龙 8+ Gen 1、8 Gen 1），推荐以下黄金组合：
+针对搭载高通 Adreno 730 GPU 的设备（如骁龙 8+ Gen 1、8 Gen 1），推荐采用以下黄金配置：
 
-| 组件名称 | 推荐版本 | 说明 |
-| :--- | :--- | :--- |
-| **Mesa Turnip** | `v24.1.0` | 稳定性与专有指令支持最佳，无纹理闪烁 |
-| **DXVK 转译层** | `2.3.1` | 完善支持 D3D11 特性与非阻塞管线编译 |
-| **Box64 Dynarec** | `0.3.0+` | 采用保守基本块生成，控制编译 CPU 尖峰开销 |
-| **渲染模式** | 独占全屏 (Native) | 保持与容器原生分辨率 1:1 输出 |
+- **Mesa Turnip** (`v24.1.0`)
+  - 稳定性与专有指令支持最佳，消除纹理闪烁
+- **DXVK 转译层** (`2.3.1`)
+  - 完善支持 D3D11 特性与非阻塞管线异步编译
+- **Box64 Dynarec** (`0.3.0+`)
+  - 采用保守基本块生成，控制重编译 CPU 尖峰开销
+- **渲染模式**（独占全屏 Native）
+  - 保持与容器原生分辨率 1:1 输出
 
-### 2.2 启动桩环境参数自动注入与软编码动态分辨率接管
-在最新版本的引导启动器（`src/stub_perfect.c`）中，程序已在调用引擎前自动注入以下环境变量并软编码接管显示模式（仅调用 Win32 原生 API，无任何 C 运行时依赖）：
+### 2.2 启动脚本环境参数注入与分辨率管理（launcher.sh）
+根据单一职责原则，转译层驱动参数已统一由外部启动脚本 `launcher.sh` 注入，避免在 Windows PE 二进制引导桩中硬编码非通用环境变量：
 - `BOX64_DYNAREC_BIGBLOCK=1`：放弃激进的 BIGBLOCK=2，改用保守基本块重编译策略，避免翻译缓存未命中引发的 CPU 异常尖峰与瞬时卡顿；
 - `BOX64_DYNAREC_SAFEFLAGS=1`：优化状态标志寄存器模拟，兼顾安全性与分支效率；
 - `BOX64_DYNAREC_ALIGNED_ATOMICS=1`：强制多线程原子操作内存对齐，避免 Unity JobSystem 多线程锁竞争异常；
 - `BOX64_DYNAREC_STRONGMEM=1`：模拟强内存模型（Strong Memory Model），在 ARM 弱内存序架构下提供严格的内存屏障保护，防止高负载下线程死锁；
 - `DXVK_ASYNC=1`：开启非阻塞管线异步编译，消除初次着色器构建卡顿；
 - `MESA_SHADER_CACHE=1`：开启 Mesa 底层磁盘持久化着色器缓存；
-- `MESA_SHADER_CACHE_DIR` 与 `DXVK_STATE_CACHE_PATH`：启动时通过 `GetCurrentDirectoryA` 动态获取游戏目录，自动创建并绑定 `shader_cache` 目录，确保着色器与管线状态缓存获得绝对持久化存储；
-- **动态分辨率软编码与无边框窗口接管**：通过 `GetSystemMetrics(SM_CXSCREEN)` 与 `GetSystemMetrics(SM_CYSCREEN)` 动态获取 Wine 容器真实分辨率，严禁硬编码静态数值，自动拼接 `-screen-width <宽> -screen-height <高> -popupwindow -screen-fullscreen 0` 传递给 Unity 引擎，从启动源头彻底绕开底层 DXVK 交换链重建风险。
-
-> [!WARNING]
-> **启动器已动态接管显示模式并锁定为无边框窗口，请勿在游戏内切换全屏，以免触发移动端转译层的图形上下文丢失（Device Lost）崩溃。**
+- `MESA_SHADER_CACHE_DIR` 与 `DXVK_STATE_CACHE_PATH`：启动时自动创建并绑定 `shader_cache` 目录，确保着色器与管线状态缓存获得绝对持久化存储；
+- **动态分辨率与无边框窗口模式**：脚本优先查询显示分辨率，传递 `-screen-width <宽> -screen-height <高> -popupwindow -screen-fullscreen 0` 启动 Unity 引擎，降低移动端 DXVK 交换链重建崩溃风险。
 
 ### 2.3 前端配置与底层注入优先级（只补位不覆盖）
-本启动器严格遵循“只补位不覆盖”（Fallback-only）的设计哲学：
-在注入任何环境变量（如 `BOX64_DYNAREC_SAFEFLAGS`、`MESA_SHADER_CACHE`、`DXVK_ASYNC` 等）前，程序首先调用 `GetEnvironmentVariableA` 检查当前进程上下文。
-如果用户在 Winlator 界面设置过相关参数，本启动器将完全尊重用户配置，绝对禁止强行覆盖；
-仅在用户未配置时，注入本补丁测试过的最佳稳定参数。
-
-对于 `MESA_SHADER_CACHE_DIR` 和 `DXVK_STATE_CACHE_PATH` 缓存路径，启动桩通过 `GetCurrentDirectoryA` 动态获取游戏当前的绝对物理路径再拼接缓存目录名，绝对禁止写死如 `C:\` 或 `Z:\` 等特定挂载点，确保跨不同容器挂载方式下的绝对兼容。
+`launcher.sh` 严格遵循“只补位不覆盖”（Fallback-only）的设计哲学：
+在注入任何环境变量（如 `BOX64_DYNAREC_SAFEFLAGS`、`MESA_SHADER_CACHE`、`DXVK_ASYNC` 等）前，脚本首先检查当前进程上下文是否已有对应配置。
+如果用户在 Winlator 等容器前端界面预设过相关参数，将完全尊重用户配置，绝不强行覆盖；仅在用户未配置时补充稳定参数。
 
 ## 3. 物理机对齐与着色器缓存持久化
 

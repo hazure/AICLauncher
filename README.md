@@ -74,18 +74,23 @@ set AIC_GAME_DIR=D:\Games\AliceInCradle_ver030
 ### 4.2 执行补丁流水线
 ```bash
 # 1. 编译并部署纯净启动器（替换原 AliceInCradle.exe）
-x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib -Wl,-e,WinMainCRTStartup \
-  -o "$AIC_GAME_DIR/AliceInCradle.exe" src/stub_perfect.c -lkernel32 -luser32
+x86_64-w64-mingw32-clang -O2 -s -mwindows -nostdlib \
+  -Wl,-e,WinMainCRTStartup \
+  -o "$AIC_GAME_DIR/AliceInCradle.exe" \
+  src/stub_perfect.c -lkernel32 -luser32
 
 # 2. 执行本地托管代码动态重定向（自动同步 _sha.txt，采用原子化写入）
 python3 patch_unsafeAssem.py
 
 # 进阶参数：路径独立性与第三方 Mod 深度兼容
 # A. 手动指定目标 DLL 路径（支持绝对路径/调试包目录）：
-python3 patch_unsafeAssem.py --target "/path/to/debug/unsafeAssem.dll"
+python3 patch_unsafeAssem.py \
+  --target "/path/to/debug/unsafeAssem.dll"
 
 # B. 第三方 Mod 深度兼容（跳过指令特征校验，强制重算并同步 _sha.txt）：
-python3 patch_unsafeAssem.py --target "/path/to/debug/unsafeAssem.dll" --force-skip-sha
+python3 patch_unsafeAssem.py \
+  --target "/path/to/debug/unsafeAssem.dll" \
+  --force-skip-sha
 
 # 3. 运行内置自动化测试套件验证完整性（可选）
 python3 patch_unsafeAssem.py --test
@@ -94,7 +99,7 @@ python3 patch_unsafeAssem.py --test
 # 方式 A：直接启动（纯净透传参数）
 wine "$AIC_GAME_DIR/AliceInCradle.exe"
 
-# 方式 B：使用 launcher.sh（针对 Android / 转译容器优化 Box64、DXVK 与 Mesa 驱动参数）
+# 方式 B：使用 launcher.sh（针对 Android / 转译容器优化驱动参数）
 ./launcher.sh
 ```
 *详细步骤与异常排查请参阅 [快速上手文档](docs/guide/quickstart.md)。*
@@ -104,14 +109,16 @@ wine "$AIC_GAME_DIR/AliceInCradle.exe"
 ## 5. 底层性能调优与驱动搭配指南（解耦至 launcher.sh）
 
 ### 5.1 Adreno 730 推荐配置
-针对搭载高通 Adreno 730 GPU 的设备（如骁龙 8+ Gen 1、8 Gen 1），推荐以下黄金组合：
+针对搭载高通 Adreno 730 GPU 的设备（如骁龙 8+ Gen 1、8 Gen 1），推荐采用以下黄金配置：
 
-| 组件名称 | 推荐版本 | 说明 |
-| :--- | :--- | :--- |
-| **Mesa Turnip** | `v24.1.0` | 稳定性与专有指令支持最佳，无纹理闪烁 |
-| **DXVK 转译层** | `2.3.1` | 完善支持 D3D11 特性与非阻塞管线编译 |
-| **Box64 Dynarec** | `0.3.0+` | 采用保守基本块生成，控制编译 CPU 尖峰开销 |
-| **渲染模式** | 独占全屏 (Native) | 保持与容器原生分辨率 1:1 输出 |
+- **Mesa Turnip** (`v24.1.0`)
+  - 稳定性与专有指令支持最佳，消除纹理闪烁
+- **DXVK 转译层** (`2.3.1`)
+  - 完善支持 D3D11 特性与非阻塞管线异步编译
+- **Box64 Dynarec** (`0.3.0+`)
+  - 采用保守基本块生成，控制重编译 CPU 尖峰开销
+- **渲染模式**（独占全屏 Native）
+  - 保持与容器原生分辨率 1:1 输出
 
 ### 5.2 职责解耦：外部启动脚本 `launcher.sh`
 根据单一职责原则（SRP），原先硬编码在 C 引导桩中的转译层环境参数已彻底移出至独立的外部启动脚本 `launcher.sh`，保证 Windows PE 二进制文件本身的纯净与跨平台通用性：
@@ -155,37 +162,30 @@ python3 patch_unsafeAssem.py --force-skip-sha
 ```
 
 ### Q2: 自定义调试包或外部路径支持？
-脚本具备完全的路径独立性。如果将 DLL 放在特定调试包路径下（如 `/storage/emulated/0/Documents/ALC功能调试包/unsafeAssem.dll`），支持通过命令行 `--target` 手动指定目标 DLL 路径：
+脚本具备完全的路径独立性。如果将 DLL 放在特定调试包路径下（如独立功能调试包目录），支持通过命令行 `--target` 手动指定目标 DLL 路径并换行安全执行：
 ```bash
-python3 patch_unsafeAssem.py --target "/storage/emulated/0/Documents/ALC功能调试包/unsafeAssem.dll" --force-skip-sha
+python3 patch_unsafeAssem.py \
+  --target "/storage/emulated/0/Documents/ALC功能调试包/unsafeAssem.dll" \
+  --force-skip-sha
 ```
 
 ---
 
 ## 7. 仓库结构说明
 
-```
+```text
 alice-in-cradle-030-vm-patch/
-├── docs/                                 # 完整技术文档库（支持 GitHub Pages / Docsify）
-│   ├── .nojekyll                         # GitHub Pages 静态站点标记
-│   ├── index.html                        # Docsify 单页文档引擎入口
-│   ├── README.md                         # 文档主页
-│   ├── principles/                       # 双层检测原理深度剖析
-│   ├── bypass/                           # 绕过实现与字节码重定向工程细节
-│   └── guide/                            # 快速上手、驱动最佳化、多编译器与 FAQ
+├── docs/                 # 技术文档库（Docsify / Pages）
+│   ├── principles/       # 双层检测深度剖析
+│   ├── bypass/           # 绕过实现与字节码重定向
+│   └── guide/            # 上手指南与驱动最佳化
 ├── src/
-│   └── stub_perfect.c                    # 纯净 Win64 启动器原生 C 源码（Zero-CRT，参数透传 Thin Stub）
-├── launcher.sh                           # 外部容器环境配置与启动器（管理 Box64 / DXVK / Mesa 驱动）
-├── tests/                                # 历史探索实验套件与逆向复盘工具
-│   ├── 01_asset_suppression_attempts/    # 方案A: 资产层报错抑制实验
-│   ├── 02_dll_hijacking_attempts/        # 方案B: DLL 劫持侧载实验
-│   ├── 03_native_engine_analysis/        # 方案C: 原生引擎反汇编分析
-│   ├── 04_launcher_stub_evolution/       # 方案D: 启动器三代演进史
-│   ├── 05_pe_il_analysis_tools/          # 方案E: PE 节区解析与偏移计算工具
-│   └── README.md                         # 测试套件复盘报告
-├── patch_unsafeAssem.py                  # 本地自动化 IL 字节码修补脚本（支持自测与 SHA 同步）
-├── update_sha.py                         # SHA-256 自动化校验同步脚本
-└── README.md                             # 项目主说明文档
+│   └── stub_perfect.c    # 纯净 Thin Stub 源码 (Zero-CRT)
+├── launcher.sh           # 转译容器环境与驱动配置脚本
+├── tests/                # 历史逆向探索与复盘工具
+├── patch_unsafeAssem.py  # 本地 IL 字节码原子修补器
+├── update_sha.py         # SHA-256 校验更新脚本
+└── README.md             # 项目主说明文档
 ```
 
 ---

@@ -19,11 +19,16 @@
       padding: 20px 15px;
     }
     /* Mobile-first code & table scrolling */
+    .markdown-section p,
+    .markdown-section li {
+      word-break: break-word;
+    }
     .markdown-section pre,
     .markdown-section pre > code {
       overflow-x: auto;
       white-space: pre;
       word-wrap: normal;
+      -webkit-overflow-scrolling: touch;
     }
     .markdown-section table {
       display: block;

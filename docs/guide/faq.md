@@ -59,7 +59,9 @@
      ```
   3. 若目标 DLL 位于独立调试包或外部路径下，支持通过 `--target` 显式指定：
      ```bash
-     python3 patch_unsafeAssem.py --target "/path/to/debug/unsafeAssem.dll" --force-skip-sha
+     python3 patch_unsafeAssem.py \
+       --target "/path/to/debug/unsafeAssem.dll" \
+       --force-skip-sha
      ```
 
 ### Q4: 终端运行脚本提示找不到目标动态库？

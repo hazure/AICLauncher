@@ -12,14 +12,12 @@
 
 ## 2. 目标程序与环境规范
 
-| 属性 | 规格参数 |
-| :--- | :--- |
-| **目标游戏名称** | Alice in Cradle |
-| **目标游戏版本** | 官方独立版 **ver0.30** |
-| **底层引擎架构** | Unity 2022.3.62f2 (Windows x86-64 Standalone, MonoBleedingEdge) |
-| **目标运行环境** | Linux (Wine 8.0+) / Android 转译容器 (Termux-X11 / Winlator / Mobox / Box64) |
-| **外层防护方案** | Oreans Themida 原生加壳 |
-| **内层防护方案** | Unity 托管代码环境指纹分析 + SHA-256 完整性链条校验 |
+- **目标游戏名称**：Alice in Cradle
+- **目标游戏版本**：官方独立版 **ver0.30**
+- **底层引擎架构**：Unity 2022.3.62f2 (Windows x86-64 Standalone, MonoBleedingEdge)
+- **目标运行环境**：Linux (Wine 8.0+) / Android 转译容器 (Termux-X11 / Winlator / Mobox / Box64)
+- **外层防护方案**：Oreans Themida 原生加壳
+- **内层防护方案**：Unity 托管代码环境指纹分析 + SHA-256 完整性链条校验
 
 ## 3. 文档体系导览
 

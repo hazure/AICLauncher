@@ -42,7 +42,8 @@ void WinMainCRTStartup(void) {
         char msg[128];
         char code[16];
         int idx = 0;
-        const char prefix[] = "Fatal: Failed to load UnityPlayer.dll (ErrorCode: ";
+        const char prefix[] =
+            "Fatal: Failed to load UnityPlayer.dll (ErrorCode: ";
         for (int i = 0; prefix[i]; i++) {
             msg[idx++] = prefix[i];
         }
@@ -63,13 +64,17 @@ void WinMainCRTStartup(void) {
         msg[idx++] = ')';
         msg[idx] = '\0';
 
-        MessageBoxA(NULL, msg, "AliceInCradle Launcher Error", MB_ICONERROR | MB_OK);
+        MessageBoxA(NULL, msg,
+            "AliceInCradle Launcher Error", MB_ICONERROR | MB_OK);
         ExitProcess(1);
     }
 
-    UnityMain2_t pUnityMain2 = (UnityMain2_t)GetProcAddress(hUnity, "UnityMain2");
+    UnityMain2_t pUnityMain2 =
+        (UnityMain2_t)GetProcAddress(hUnity, "UnityMain2");
     if (!pUnityMain2) {
-        MessageBoxA(NULL, "Fatal: Export 'UnityMain2' not found in UnityPlayer.dll", "AliceInCradle Launcher Error", MB_ICONERROR | MB_OK);
+        MessageBoxA(NULL,
+            "Fatal: Export 'UnityMain2' not found in UnityPlayer.dll",
+            "AliceInCradle Launcher Error", MB_ICONERROR | MB_OK);
         ExitProcess(2);
     }
 
