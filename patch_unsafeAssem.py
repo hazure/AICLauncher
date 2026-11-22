@@ -346,7 +346,12 @@ def patch_binary_atomic(target_path, patch_offset, expected_orig, patch_bytes):
                 os.remove(tmp_name)
             raise
 
-def sync_sha_file(dll_path, new_hash):
+def _matches_manifest_entry(entry_path, target_name):
+    """Exact case-insensitive basename check to avoid substring collisions."""
+    norm_entry = entry_path.replace("\\", "/").strip()
+    return os.path.basename(norm_entry).lower() == target_name.lower()
+
+def sync_sha_file(dll_path, new_hash, target_name="unsafeAssem.dll"):
     """Synchronizes the updated assembly SHA-256 with StreamingAssets/_sha.txt atomically."""
     base_dir = os.path.dirname(os.path.abspath(dll_path))
     candidates = [
@@ -373,7 +378,7 @@ def sync_sha_file(dll_path, new_hash):
         print("[Notice] StreamingAssets/_sha.txt not found nearby. Skipping SHA manifest sync.")
         return False
 
-    with open(sha_file, "r", encoding="utf-8", errors="ignore") as f:
+    with open(sha_file, "r", encoding="utf-8", errors="ignore", newline="") as f:
         raw_lines = f.readlines()
 
     updated = False
@@ -382,19 +387,21 @@ def sync_sha_file(dll_path, new_hash):
     while i < len(raw_lines):
         line = raw_lines[i]
         stripped = line.strip()
+        eol = "\r\n" if line.endswith("\r\n") else "\n"
 
         # Two-line format: path \n hash
-        if ("unsafeAssem.dll" in stripped) and not any(c in stripped for c in " \t") and (i + 1 < len(raw_lines)):
+        if _matches_manifest_entry(stripped, target_name) and not any(c in stripped for c in " \t") and (i + 1 < len(raw_lines)):
+            next_eol = "\r\n" if raw_lines[i + 1].endswith("\r\n") else "\n"
             new_lines.append(line)
-            new_lines.append(f"{new_hash}\n")
+            new_lines.append(f"{new_hash}{next_eol}")
             updated = True
             i += 2
             continue
 
         # Single-line format: hash path
-        parts = stripped.split()
-        if len(parts) >= 2 and ("unsafeAssem.dll" in parts[1]):
-            new_lines.append(f"{new_hash}  {parts[1]}\n")
+        parts = stripped.split(None, 1)
+        if len(parts) == 2 and _matches_manifest_entry(parts[1], target_name):
+            new_lines.append(f"{new_hash}  {parts[1]}{eol}")
             updated = True
             i += 1
             continue
@@ -404,16 +411,24 @@ def sync_sha_file(dll_path, new_hash):
 
     if updated:
         dirname, basename = os.path.split(sha_file)
-        with tempfile.NamedTemporaryFile("w", dir=dirname, prefix=f".{basename}.", delete=False, encoding="utf-8") as tmp_f:
-            tmp_name = tmp_f.name
-            tmp_f.writelines(new_lines)
-            tmp_f.flush()
-            os.fsync(tmp_f.fileno())
-        os.replace(tmp_name, sha_file)
-        print(f"[OK] Synchronized SHA-256 to {sha_file}")
+        tmp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", dir=dirname, prefix=f".{basename}.", delete=False, encoding="utf-8", newline=""
+            ) as tmp_f:
+                tmp_name = tmp_f.name
+                tmp_f.writelines(new_lines)
+                tmp_f.flush()
+                os.fsync(tmp_f.fileno())
+            os.replace(tmp_name, sha_file)
+        except Exception:
+            if tmp_name and os.path.exists(tmp_name):
+                os.remove(tmp_name)
+            raise
+        print(f"[OK] Synchronized {target_name} SHA-256 to {sha_file}")
         return True
     else:
-        print(f"[Notice] unsafeAssem.dll entry not found in {sha_file}.")
+        print(f"[Notice] {target_name} entry not found in {sha_file}.")
         return False
 
 def patch_file(dll_path, auto_sync_sha=True, force_skip_sha=False):
