@@ -1,9 +1,9 @@
-# Alice in Cradle (ver0.30) VM Patch & Technical Research
+# AliceInCradle 安卓端兼容补丁
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Target: Alice in Cradle v0.30](https://img.shields.io/badge/Target-Alice%20in%20Cradle%20v0.30-success.svg)]()
 [![Platform: Win64 / Linux Wine / Android](https://img.shields.io/badge/Platform-Win64%20%7C%20Wine%20%7C%20Android-orange.svg)]()
-[![Documentation](https://img.shields.io/badge/Docs-GitHub%20Pages-brightgreen.svg)](https://hazure.github.io/alice-in-cradle-030-vm-patch/)
+[![Documentation](https://img.shields.io/badge/Docs-GitHub%20Pages-brightgreen.svg)](https://hazure.github.io/AliceInCradle-Android-Compat-Patch/)
 [![Branch: dev (Verified)](https://img.shields.io/badge/Branch-dev%20(Verified)-blue.svg)]()
 
 针对独立游戏《Alice in Cradle》（ver0.30，Windows x86-64）虚拟机与运行环境检测机制的深度逆向分析、开源引导器与本地自动化修补方案。
@@ -61,7 +61,7 @@ git checkout nocheck_dev  # 未验证的实验分支
 
 本项目已构建模块化技术文档库，并支持通过 GitHub Pages 在线浏览：
 
-- **在线文档站点**：[https://hazure.github.io/alice-in-cradle-030-vm-patch/](https://hazure.github.io/alice-in-cradle-030-vm-patch/)
+- **在线文档站点**：[https://hazure.github.io/AliceInCradle-Android-Compat-Patch/](https://hazure.github.io/AliceInCradle-Android-Compat-Patch/)
 - **本地文档目录**：[`docs/`](docs/)
 
 ### 文档目录索引
@@ -197,7 +197,7 @@ python3 patch_unsafeAssem.py \
 ## 7. 仓库结构说明
 
 ```text
-alice-in-cradle-030-vm-patch/
+AliceInCradle-Android-Compat-Patch/
 ├── docs/                 # 技术文档库（Docsify / Pages）
 │   ├── principles/       # 双层检测深度剖析
 │   ├── bypass/           # 绕过实现与字节码重定向
