@@ -89,7 +89,7 @@ tasks:
     rollback: 移除游戏根目录注入三件套并删除 docs/baseline/injection_trio_manifest.json
     risk: 注入三件套路径或版本不匹配导致插件框架不加载；触发条件：动态库搜索顺序劫持未生效
     owner: human
-    status: approved
+    status: done
 
   - id: T04
     title: 编写示例插件
