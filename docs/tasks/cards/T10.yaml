@@ -25,4 +25,4 @@ acceptance:
 rollback: rm -f launcher/modmanager.py tests/test_modmanager.py
 risk: 反复启停后插件目录残留或误覆盖游戏原始文件；触发条件：同步操作非幂等
 owner: agent
-status: approved
+status: done
