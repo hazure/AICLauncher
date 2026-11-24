@@ -25,4 +25,4 @@ acceptance:
 rollback: rm -f launcher/reporter.py tests/test_reporter.py
 risk: 自动动作未留存回滚信息或擅自修改存档/配置；触发条件：报告缺少回滚字段
 owner: agent
-status: approved
+status: done
