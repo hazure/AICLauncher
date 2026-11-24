@@ -24,4 +24,4 @@ acceptance:
 rollback: rm -f docs/baseline/patch_points.json
 risk: 目标方法签名随游戏版本漂移；触发条件：托管程序集更新后补丁点无法命中
 owner: agent+human
-status: approved
+status: done
