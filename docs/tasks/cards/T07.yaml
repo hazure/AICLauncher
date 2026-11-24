@@ -24,4 +24,4 @@ acceptance:
 rollback: 清空插件生效目录并对照 docs/baseline/baseline.json 核验哈希
 risk: 插件或框架残留文件污染游戏目录；触发条件：关闭插件后哈希与基线不一致
 owner: human
-status: approved
+status: done
