@@ -271,7 +271,7 @@ tasks:
     rollback: rm -f launcher/preflight.py tests/test_preflight.py
     risk: 预检未拦截版本漂移或误自动修复；触发条件：文件被篡改后仍返回通过
     owner: agent
-    status: approved
+    status: done
 
   - id: T10
     title: 模组双目录幂等同步
