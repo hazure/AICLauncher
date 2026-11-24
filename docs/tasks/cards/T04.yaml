@@ -28,4 +28,4 @@ acceptance:
 rollback: rm -rf plugins/HelloPlugin
 risk: 示例插件目标框架与游戏运行时不兼容；触发条件：引擎日志未出现插件输出行
 owner: agent
-status: approved
+status: done
