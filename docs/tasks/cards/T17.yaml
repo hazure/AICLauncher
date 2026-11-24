@@ -28,4 +28,4 @@ acceptance:
 rollback: rm -f .github/workflows/ci.yml scripts/check_arch.sh
 risk: 流水线包含明文凭据或未检查产物架构；触发条件：Secrets 未隔离或缺少 aarch64 校验
 owner: agent
-status: approved
+status: done
