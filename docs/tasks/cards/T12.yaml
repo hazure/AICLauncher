@@ -26,4 +26,4 @@ acceptance:
 rollback: rm -f launcher/spawner.py tests/test_spawner.py
 risk: 工作目录错位导致 UnityPlayer.dll 或日志路径解析失败；触发条件：cwd 非游戏根目录
 owner: agent
-status: approved
+status: done

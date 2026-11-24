@@ -394,7 +394,7 @@ tasks:
     rollback: rm -f launcher/cli.py tests/test_cli.py
     risk: 模块间契约不匹配导致串联失败；触发条件：参数或退出码传递异常
     owner: agent
-    status: approved
+    status: done
 
   - id: T14
     title: 看门狗线程与尾部读取
