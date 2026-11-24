@@ -4,8 +4,13 @@
 [![Target: Alice in Cradle v0.30](https://img.shields.io/badge/Target-Alice%20in%20Cradle%20v0.30-success.svg)]()
 [![Platform: Win64 / Linux Wine / Android](https://img.shields.io/badge/Platform-Win64%20%7C%20Wine%20%7C%20Android-orange.svg)]()
 [![Documentation](https://img.shields.io/badge/Docs-GitHub%20Pages-brightgreen.svg)](https://hazure.github.io/alice-in-cradle-030-vm-patch/)
+[![Branch: nocheck_dev (Experimental)](https://img.shields.io/badge/Branch-nocheck__dev%20(Experimental)-red.svg)]()
 
 针对独立游戏《Alice in Cradle》（ver0.30，Windows x86-64）虚拟机与运行环境检测机制的深度逆向分析、开源引导器与本地自动化修补方案。
+
+> [!CAUTION]
+> **当前分支：`nocheck_dev`（超前线 · 未验证实验分支，最不稳定）**
+> 本分支包含**未经完整验证的实验性功能**与前沿原型代码，可能随时发生破坏性变更，存在引发程序异常、崩溃或兼容退化的风险。**使用前请务必完整备份游戏文件与存档，切勿用于日常游玩**；稳定使用请切换至 `main`，体验已验证新特性请切换至 `dev`。
 
 ---
 
@@ -16,6 +21,24 @@
 本项目的核心宗旨并非破坏性破解或鼓励绕过保护机制，而是以透明的逆向工程视角，完整解构 Themida 加壳保护原理与 Unity C# 托管层环境指纹检测链条，引导开发者与安全研究员共同正面学习与技术交流。
 
 项目遵循负责任的披露与研究原则，**仓库不包含任何受版权保护的官方二进制资产或 DLL 文件**，全部修补均通过本地开源脚本计算与原地重定向完成。
+
+### 1.1 分支架构与使用说明
+
+本仓库采用三级稳定性通道推进迭代（`nocheck_dev` → `dev` → `main`）：
+
+- **`main`（主线稳定版本）**
+  - 面向日常使用的稳定基线，仅合入经过完整测试与实机验证的成熟改动，优先保证可靠性与兼容性。
+- **`dev`（前线分支 · 经验证）**
+  - 已通过基础测试与验证的前线开发分支，包含即将合入主线的新特性与优化，适合希望抢先体验新改动的用户。
+- **`nocheck_dev`（超前线实验分支 · 未验证，最不稳定 · 当前分支）**
+  - 存放未经验证的实验性功能与前沿原型代码，可能随时发生破坏性改动或存在未知异常，仅限开发者与测试人员评估使用。
+
+快速切换分支：
+```bash
+git checkout main         # 稳定主线
+git checkout dev          # 经验证的前线分支
+git checkout nocheck_dev  # 未验证的实验分支
+```
 
 ---
 
