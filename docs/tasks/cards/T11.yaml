@@ -25,4 +25,4 @@ acceptance:
 rollback: rm -f launcher/envbuilder.py tests/test_envbuilder.py
 risk: 转译层内存强度或调试变量映射错误；触发条件：输出与预设表不一致
 owner: agent
-status: approved
+status: done
