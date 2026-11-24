@@ -1,0 +1,58 @@
+[
+  {
+    "id": "SIG-01",
+    "pattern": "图形指令未处理|GL_INVALID_OPERATION|unhandled graphics",
+    "diagnosis": "转译层不支持的图形指令",
+    "action": "提示清理着色器缓存并切换低画质预设",
+    "require_confirm": true
+  },
+  {
+    "id": "SIG-02",
+    "pattern": "引擎动态库未找到|UnityPlayer\\.dll.*not found",
+    "diagnosis": "工作目录错位",
+    "action": "重新以游戏根目录拉起",
+    "require_confirm": false
+  },
+  {
+    "id": "SIG-03",
+    "pattern": "访问违例|Access Violation|SIGSEGV",
+    "diagnosis": "转译层内存模型问题",
+    "action": "建议提高内存模型强度后重试",
+    "require_confirm": true
+  },
+  {
+    "id": "SIG-04",
+    "pattern": "执行引擎异常|ExecutionEngineException",
+    "diagnosis": "托管层与运行时不匹配",
+    "action": "停用全部插件后复现，定位问题插件",
+    "require_confirm": true
+  },
+  {
+    "id": "SIG-05",
+    "pattern": "哈希不匹配|hash mismatch",
+    "diagnosis": "游戏或补丁版本漂移",
+    "action": "拒绝启动并输出期望与实际哈希",
+    "require_confirm": false
+  },
+  {
+    "id": "SIG-06",
+    "pattern": "内存分配失败|OutOfMemoryException",
+    "diagnosis": "地址空间或显存压力",
+    "action": "建议停用高开销插件并降低画质",
+    "require_confirm": true
+  },
+  {
+    "id": "SIG-07",
+    "pattern": "引导配置未生效|doorstop.*not loaded",
+    "diagnosis": "注入三件套缺失或位置错误",
+    "action": "输出三件套期望路径清单",
+    "require_confirm": true
+  },
+  {
+    "id": "SIG-08",
+    "pattern": "引擎日志未生成|Player\\.log.*missing",
+    "diagnosis": "引导层未成功拉起引擎",
+    "action": "回查引导程序与工作目录，输出诊断包",
+    "require_confirm": false
+  }
+]

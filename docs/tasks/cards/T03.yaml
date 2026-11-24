@@ -1,0 +1,27 @@
+id: T03
+title: 放置注入三件套并校验目录
+batch: 批次二（注入打通）
+plan_ref: "PLAN.md 第二章（四）— 插件框架注入三件套与目录校验清单"
+depends_on:
+  - T01
+parallel_group: solo
+write_paths:
+  - docs/baseline/injection_trio_manifest.json
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 在游戏根目录放置插件框架注入三件套（网络劫持组件、引导配置文件、插件框架目录）并记录校验清单
+acceptance:
+  - id: AC-T03-1
+    cmd: python3 -c "import json; d=json.load(open('docs/baseline/injection_trio_manifest.json')); assert len(d.get('paths',[]))==3"
+    expect: exit==0
+rollback: 移除游戏根目录注入三件套并删除 docs/baseline/injection_trio_manifest.json
+risk: 注入三件套路径或版本不匹配导致插件框架不加载；触发条件：动态库搜索顺序劫持未生效
+owner: human
+status: done

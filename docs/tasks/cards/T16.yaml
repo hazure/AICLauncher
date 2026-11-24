@@ -1,0 +1,28 @@
+id: T16
+title: 处置报告与回滚记录
+batch: 批次五（自愈看门狗）
+plan_ref: "PLAN.md 第四章（三）— 处置报告生成器 launcher/reporter.py"
+depends_on:
+  - T15
+parallel_group: solo
+write_paths:
+  - launcher/reporter.py
+  - tests/test_reporter.py
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 实现处置报告生成器 launcher/reporter.py，遵守只建议不擅改、动作可回滚、留痕优先原则，记录完整回滚信息
+acceptance:
+  - id: AC-T16-1
+    cmd: python3 -m unittest tests/test_reporter.py
+    expect: exit==0
+rollback: rm -f launcher/reporter.py tests/test_reporter.py
+risk: 自动动作未留存回滚信息或擅自修改存档/配置；触发条件：报告缺少回滚字段
+owner: agent
+status: done

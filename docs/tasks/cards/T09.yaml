@@ -1,0 +1,28 @@
+id: T09
+title: 预检模块与双哈希校验
+batch: 批次四（无头启动器）
+plan_ref: "PLAN.md 第三章（四）— 预检模块 launcher/preflight.py 与双哈希校验"
+depends_on:
+  - T08
+parallel_group: batch4_modules
+write_paths:
+  - launcher/preflight.py
+  - tests/test_preflight.py
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 实现预检模块 launcher/preflight.py，完成校验清单哈希与托管程序集内容哈希双重校验，失败时拒绝启动
+acceptance:
+  - id: AC-T09-1
+    cmd: python3 -m unittest tests/test_preflight.py
+    expect: exit==0
+rollback: rm -f launcher/preflight.py tests/test_preflight.py
+risk: 预检未拦截版本漂移或误自动修复；触发条件：文件被篡改后仍返回通过
+owner: agent
+status: done

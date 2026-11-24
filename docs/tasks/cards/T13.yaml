@@ -1,0 +1,34 @@
+id: T13
+title: 命令行入口串联
+batch: 批次四（无头启动器）
+plan_ref: "PLAN.md 第三章（一）（三）— 命令行入口 launcher/cli.py"
+depends_on:
+  - T09
+  - T10
+  - T11
+  - T12
+parallel_group: solo
+write_paths:
+  - launcher/cli.py
+  - tests/test_cli.py
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 实现命令行入口 launcher/cli.py，串联预检、模组同步、环境构建与进程拉起，支持一条命令完成启动流程
+acceptance:
+  - id: AC-T13-1
+    cmd: python3 -m unittest tests/test_cli.py
+    expect: exit==0
+  - id: AC-T13-2
+    cmd: python3 -m launcher.cli --help
+    expect: exit==0
+rollback: rm -f launcher/cli.py tests/test_cli.py
+risk: 模块间契约不匹配导致串联失败；触发条件：参数或退出码传递异常
+owner: agent
+status: done

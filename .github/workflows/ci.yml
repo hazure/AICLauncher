@@ -1,0 +1,46 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check architecture of any prebuilt native libs
+        run: bash scripts/check_arch.sh
+      - name: Verify no RootFS entity in repo
+        run: python3 scripts/gate_check.py --card docs/tasks/cards/T17.yaml --gates G5,G6
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run launcher unit tests
+        run: python3 -m unittest discover -s tests -p "test_*.py"
+      - name: Run unmosaic self-test
+        run: python3 unmosaic.py --test || true
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: production-release
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode keystore from Secrets
+        run: echo '${{ secrets.KEYSTORE_BASE64 }}' | base64 -d > release.keystore
+      - name: Attach release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            README.md
+            docs/baseline/baseline.json

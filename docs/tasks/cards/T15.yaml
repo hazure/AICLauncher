@@ -1,0 +1,31 @@
+id: T15
+title: 特征库与处置建议
+batch: 批次五（自愈看门狗）
+plan_ref: "PLAN.md 第四章（二）— 错误特征库 launcher/signatures.json 与处置矩阵"
+depends_on:
+  - T14
+parallel_group: solo
+write_paths:
+  - launcher/signatures.json
+  - tests/test_signatures.py
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 建立第四章八条错误特征库 launcher/signatures.json 及处置动作匹配测试，确保合成日志八条全命中
+acceptance:
+  - id: AC-T15-1
+    cmd: python3 -m unittest tests/test_signatures.py
+    expect: exit==0
+  - id: AC-T15-2
+    cmd: python3 -c "import json; d=json.load(open('launcher/signatures.json')); assert len(d)==8"
+    expect: exit==0
+rollback: rm -f launcher/signatures.json tests/test_signatures.py
+risk: 特征串误报或遗漏；触发条件：合成日志未命中全部八条特征
+owner: agent+human
+status: done
