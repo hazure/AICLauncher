@@ -455,7 +455,7 @@ tasks:
     rollback: rm -f launcher/signatures.json tests/test_signatures.py
     risk: 特征串误报或遗漏；触发条件：合成日志未命中全部八条特征
     owner: agent+human
-    status: approved
+    status: done
 
   - id: T16
     title: 处置报告与回滚记录

@@ -25,4 +25,4 @@ acceptance:
 rollback: rm -f launcher/watchdog.py tests/test_watchdog.py
 risk: 转译层下文件事件不可靠或轮询阻塞主进程退出；触发条件：追加日志未实时读到
 owner: agent
-status: approved
+status: done
