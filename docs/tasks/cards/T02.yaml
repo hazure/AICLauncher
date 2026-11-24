@@ -29,4 +29,4 @@ acceptance:
 rollback: git checkout -- README.md && rm -f AGENTS.md docs/PROGRESS.md
 risk: 协作约束未固化导致后续智能体越界；触发条件：AGENTS.md 缺少禁止清单或待办占位
 owner: agent
-status: approved
+status: done
