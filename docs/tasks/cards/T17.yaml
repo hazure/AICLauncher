@@ -1,0 +1,31 @@
+id: T17
+title: 流水线配置与架构自检
+batch: 批次六（流水线接入）
+plan_ref: "PLAN.md 第六章（二）（三）— 四阶段 CI 流水线与三条红线自检"
+depends_on:
+  - T13
+parallel_group: solo
+write_paths:
+  - .github/workflows/ci.yml
+  - scripts/check_arch.sh
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 落地四阶段 CI 流水线配置与架构自检脚本，守住交叉编译架构、仓库体积、凭据保护三条红线
+acceptance:
+  - id: AC-T17-1
+    cmd: test -f .github/workflows/ci.yml && test -x scripts/check_arch.sh
+    expect: exit==0
+  - id: AC-T17-2
+    cmd: grep -q "aarch64" scripts/check_arch.sh
+    expect: exit==0
+rollback: rm -f .github/workflows/ci.yml scripts/check_arch.sh
+risk: 流水线包含明文凭据或未检查产物架构；触发条件：Secrets 未隔离或缺少 aarch64 校验
+owner: agent
+status: approved

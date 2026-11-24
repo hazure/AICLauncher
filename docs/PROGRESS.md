@@ -1,0 +1,9 @@
+# 进度台账（PROGRESS）
+
+> 规则：本文件只允许追加，禁止修改或删除历史记录。
+
+| 时间 | 卡号 | 状态 | 验收结果 | 遗留项 |
+| :--- | :--- | :--- | :--- | :--- |
+| 2026-11-25 01:32 | INIT | done | `PLAN.md`/`DISPATCH.md`/`PROGRESS.md`/4 scripts/`baseline.json` 就绪；Role A 产出 `T01`–`T18` (`draft`) | 待人工审阅 `GRAPH.md` 并批准首批任务卡 |
+| 2026-11-25 01:43 | ADJUDICATOR | done | 终审 Agent 体系与 G1–G12/C1–C10 落地；`ADMISSION-r2.md` PASS（18 卡准入通过） | 待按拓扑序派发 `T01` |
+| 2026-11-25 01:56 | REGRESSION | done | N1–N10 拦截回归测试 10/10 (100%) 通过；`ADMISSION-r3.md` PASS | 流水线已通过终审拦截验证 |

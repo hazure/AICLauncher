@@ -1,0 +1,28 @@
+id: T10
+title: 模组双目录幂等同步
+batch: 批次四（无头启动器）
+plan_ref: "PLAN.md 第三章（五）— 模组双目录管理模块 launcher/modmanager.py"
+depends_on:
+  - T08
+parallel_group: batch4_modules
+write_paths:
+  - launcher/modmanager.py
+  - tests/test_modmanager.py
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 实现模组双目录管理模块 launcher/modmanager.py，按开关在 mods_pool 与插件目录间幂等搬迁组件
+acceptance:
+  - id: AC-T10-1
+    cmd: python3 -m unittest tests/test_modmanager.py
+    expect: exit==0
+rollback: rm -f launcher/modmanager.py tests/test_modmanager.py
+risk: 反复启停后插件目录残留或误覆盖游戏原始文件；触发条件：同步操作非幂等
+owner: agent
+status: approved

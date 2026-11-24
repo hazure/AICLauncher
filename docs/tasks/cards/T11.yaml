@@ -1,0 +1,28 @@
+id: T11
+title: 环境构建与预设表
+batch: 批次四（无头启动器）
+plan_ref: "PLAN.md 第三章（一）— 环境构建模块 launcher/envbuilder.py"
+depends_on:
+  - T08
+parallel_group: batch4_modules
+write_paths:
+  - launcher/envbuilder.py
+  - tests/test_envbuilder.py
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 实现环境构建模块 launcher/envbuilder.py，依据画质预设与第十一章环境变量速查表生成环境变量字典与引擎参数串
+acceptance:
+  - id: AC-T11-1
+    cmd: python3 -m unittest tests/test_envbuilder.py
+    expect: exit==0
+rollback: rm -f launcher/envbuilder.py tests/test_envbuilder.py
+risk: 转译层内存强度或调试变量映射错误；触发条件：输出与预设表不一致
+owner: agent
+status: approved

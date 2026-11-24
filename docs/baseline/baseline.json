@@ -1,0 +1,207 @@
+{
+  "generated_at": "2026-11-24T17:30:09.632743+00:00",
+  "git_head": "b1cef84fb0c135de5a10d655f5f6abdd9ff808a1",
+  "file_count": 50,
+  "files": {
+    ".gitignore": {
+      "sha256": "54a91c923bb08d33f1051504e954db5afd487c2add99b07f8b137c17bc9efedf",
+      "size": 141
+    },
+    "Docs.html": {
+      "sha256": "c676e451910518be4386d6966f04bad134a2698c97727f90b498c99d3eed150f",
+      "size": 62421
+    },
+    "README.md": {
+      "sha256": "d03af1bff9102f835ddf416151a7f7845f94b702e14278ff9e084dc22e6fcbf4",
+      "size": 3793
+    },
+    "launcher.sh": {
+      "sha256": "519e36ca7f8bfcb4060125fbb11320b16baed651bcb1e9b643f7f02006f65a3f",
+      "size": 2044
+    },
+    "patch_unsafeAssem.py": {
+      "sha256": "6c587cf9be40015f6523043f90b67978d4784b1b919079c73eae27289157c5d2",
+      "size": 29856
+    },
+    "unmosaic.py": {
+      "sha256": "9db31bb579cbc01b9067753a0f1020248a48eb4bf9b401db502134d1ae75558a",
+      "size": 62165
+    },
+    "update_sha.py": {
+      "sha256": "ae10d3dc8e4ae4db853459df07f828b1a8d659ee61a1531a324eee652c7e4f54",
+      "size": 3170
+    },
+    "docs/.nojekyll": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    "docs/DISPATCH.md": {
+      "sha256": "e8165a6b1565cf5d648a740ade6f4a35cf8dbced41a976d9c7e0dad8edebe943",
+      "size": 12411
+    },
+    "docs/PLAN.md": {
+      "sha256": "7027b2b709319826c765ce90d675c87ffa9fc7fd450ad0bc8a14a0ceff6ad9d9",
+      "size": 34922
+    },
+    "docs/PROGRESS.md": {
+      "sha256": "1783b22b5abef2fe5049a630176f2853bb47d892a4e3a28c5c351e0f4943368a",
+      "size": 199
+    },
+    "docs/README.md": {
+      "sha256": "a145df1e5a50f8179eddf3be3e068c6f26c3aa318cee37a40621eb779f0deb09",
+      "size": 3165
+    },
+    "docs/_navbar.md": {
+      "sha256": "44a0dddebe6fc2e44e5b71b3d819dddd02d5ab109ac4ced44422b66283a61cd9",
+      "size": 619
+    },
+    "docs/_sidebar.md": {
+      "sha256": "6ffca2012938ccc3cc54d51edede754fa6ddc982109f1634beaf280859dad342",
+      "size": 1056
+    },
+    "docs/disclaimer.md": {
+      "sha256": "3a00d018ceb86fbbb1eb84fda9835e18fe218c5a8afe9cb98e3cec7e189f99da",
+      "size": 2823
+    },
+    "docs/index.html": {
+      "sha256": "c50d624cad5b8b7d50d8b93d26de3c204caa352215a6a5a424e9689dba01eabf",
+      "size": 2897
+    },
+    "docs/bypass/bytecode-patch.md": {
+      "sha256": "34d19a4006e29a2c3bbb4ecb0e2c73e072563275c368eef9c0594c722eb4d69e",
+      "size": 3230
+    },
+    "docs/bypass/hash-sync.md": {
+      "sha256": "b07728edac869c0a0d58a2f38506b4994b5c5ee8a4e81d466616b101311b5661",
+      "size": 1796
+    },
+    "docs/bypass/launcher-stub.md": {
+      "sha256": "db4f2572ec179eae58ca39db7ee5734e5215dfb2b04eab4f5cee849802a3fb34",
+      "size": 4710
+    },
+    "docs/guide/compiler.md": {
+      "sha256": "efdd8c8e2e6d1e033bf8ad1942395d79c14dbdd2a10aa022e34470dc81b1e263",
+      "size": 2692
+    },
+    "docs/guide/faq.md": {
+      "sha256": "5a95fb0d565e32d86642916fd89fa51f49cf9aede4f10fad65b0e5129b7cbd96",
+      "size": 4413
+    },
+    "docs/guide/performance.md": {
+      "sha256": "be1daf992dccc841ba996c794b8fcbda2cdc48254f736033715125c6ef499ab0",
+      "size": 5245
+    },
+    "docs/guide/quickstart.md": {
+      "sha256": "762fabc59d85511770cd52d5a0a4782f13d825888ac4d1e169d13f3020206983",
+      "size": 4424
+    },
+    "docs/principles/integrity-sha.md": {
+      "sha256": "dd1882eeaffa0f2f9efce9e37b2dd0772d4cad9d5a6ea6fafa9b0ce10a8f73b9",
+      "size": 2738
+    },
+    "docs/principles/themida-detection.md": {
+      "sha256": "b44a3dc0bd2509a2ad53d1c36bbb254c82d06e02ff1ef4a815da71cc6212ff8e",
+      "size": 2705
+    },
+    "docs/principles/unity-detection.md": {
+      "sha256": "4c77f5c50685f4d342b4636cb589c0fe8056566565c00da71a19fa22f4cc3df3",
+      "size": 2549
+    },
+    "scripts/gate_check.py": {
+      "sha256": "86fb1253883c0a8dc307183439ab72bd6aa1fcfe513e60b60f14cd882f8a68b8",
+      "size": 7148
+    },
+    "scripts/gen_baseline.py": {
+      "sha256": "2420b4212981cf8fc9706860608a5e3d1739051da2a37a7d298c24e52230d3c0",
+      "size": 2624
+    },
+    "scripts/restore.sh": {
+      "sha256": "5334dcf19835121d819fa4860256211191391ba70b592aa495a3c763021fa1bc",
+      "size": 1587
+    },
+    "scripts/run_acceptance.py": {
+      "sha256": "fce3973b7ca8f8f732d3028b08e25c4a6db54f9998ffb612365afa4cec3df5c1",
+      "size": 5124
+    },
+    "src/stub_perfect.c": {
+      "sha256": "07c2fbeb752aa075b7760ba1dad8a05b69de92dc2692e7cfa1e610b7d40f332e",
+      "size": 2477
+    },
+    "tests/README.md": {
+      "sha256": "7053fe631abd5156c85dcae5a5f7dd5bdc8e30f6ff7deced21b580d288acd8bf",
+      "size": 12467
+    },
+    "tests/01_asset_suppression_attempts/delete_mb.py": {
+      "sha256": "1fc08a33de5e5af4f077cccc26621cdf4088247d8fcdf292b80512ff423209cc",
+      "size": 1447
+    },
+    "tests/01_asset_suppression_attempts/delete_mb_v2.py": {
+      "sha256": "6028c9ad5f517a585e0459c55a9a3c95b3c7713b9967ac8c25454ded5374c619",
+      "size": 1494
+    },
+    "tests/01_asset_suppression_attempts/patch_exact.py": {
+      "sha256": "97f092c4ba8bf9857baeb6d8b683952b9e0c351090609b8cdeb8be82b1de42c9",
+      "size": 1913
+    },
+    "tests/01_asset_suppression_attempts/patch_level3.py": {
+      "sha256": "f936569cb7c9a279a3a2e52eb3c7733577f017518af4282d4f9c8f2c8ff17983",
+      "size": 1637
+    },
+    "tests/01_asset_suppression_attempts/scan_level3.py": {
+      "sha256": "d3170cc18c6f1ad750373242f2265847c8075c370853508bc4179edb853ff718",
+      "size": 1450
+    },
+    "tests/01_asset_suppression_attempts/unlink_component.py": {
+      "sha256": "1c71358a24cfee4fedc1ae42d9b50680dce94d4b746abe930b1036dfc4c24b8a",
+      "size": 1568
+    },
+    "tests/02_dll_hijacking_attempts/dllmain.c": {
+      "sha256": "deb5548a0e4a59de2fb0f0df52052bb03d742e9a3e83eadfec05a3e65a5439f9",
+      "size": 819
+    },
+    "tests/02_dll_hijacking_attempts/kernel32.c": {
+      "sha256": "173fb5a4e4d8afb0f73cd72c8f7a7c9f9cf719c2fe76c47e0d99a8241595f5be",
+      "size": 307
+    },
+    "tests/02_dll_hijacking_attempts/kernel32.def": {
+      "sha256": "04df05b42c04c745b57cdbfa38927138fe7c2f1704c7c6fe682c6785babc2be9",
+      "size": 822
+    },
+    "tests/02_dll_hijacking_attempts/user32.c": {
+      "sha256": "e9a5b8b8d74936173f1d5792cb436eac6a8e9b501f4c727b01f673942adc24f0",
+      "size": 556
+    },
+    "tests/02_dll_hijacking_attempts/user32.def": {
+      "sha256": "2d87449020da36e4384994a83b4a81c15fbf1c60e0e9bb95252959d00de3368c",
+      "size": 869
+    },
+    "tests/02_dll_hijacking_attempts/user32_v2.c": {
+      "sha256": "6b8c7322feb557b80df2604f075a9200921b025775071166af857d2f6e086c99",
+      "size": 725
+    },
+    "tests/02_dll_hijacking_attempts/user32_v2.def": {
+      "sha256": "011ad12ae8e8420725aa8c5293b66b6b70417bba36ce6249b0ebe1b50ae4d705",
+      "size": 1136
+    },
+    "tests/03_native_engine_analysis/find_vmware.py": {
+      "sha256": "4b329b2b62de52a5d6a06c7ceb13cf17f95dd294251489a80546a8bc7dc603a3",
+      "size": 2281
+    },
+    "tests/04_launcher_stub_evolution/stub_v1_crt.c": {
+      "sha256": "105b796282677c95b4d785a060dfe5a5ac67285b3c4ef07deab2ff6a65c254bc",
+      "size": 965
+    },
+    "tests/04_launcher_stub_evolution/stub_v2_winmain.c": {
+      "sha256": "326d9baa85009c775920a57084462925aea2cb3dd081920871edb7caa1f034dd",
+      "size": 483
+    },
+    "tests/04_launcher_stub_evolution/stub_v3_nocrt.c": {
+      "sha256": "07fc45d58fc5b5ddd7c6265c6d217e9cfa94ca272f9d65d597ebecc64797dc96",
+      "size": 2712
+    },
+    "tests/05_pe_il_analysis_tools/pe_section_rva_tool.py": {
+      "sha256": "7b90019148866d2bcc25024a2a7df10f6d18f7b7ee3a0b5f650a8cefd5d60a49",
+      "size": 3066
+    }
+  }
+}

@@ -1,0 +1,28 @@
+id: T14
+title: 看门狗线程与尾部读取
+batch: 批次五（自愈看门狗）
+plan_ref: "PLAN.md 第四章（一）— 看门狗独立线程与双通道尾部读取"
+depends_on:
+  - T13
+parallel_group: solo
+write_paths:
+  - launcher/watchdog.py
+  - tests/test_watchdog.py
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 实现看门狗独立线程与 800ms 轮询尾部读取逻辑（覆盖引擎日志与插件框架日志双通道）
+acceptance:
+  - id: AC-T14-1
+    cmd: python3 -m unittest tests/test_watchdog.py
+    expect: exit==0
+rollback: rm -f launcher/watchdog.py tests/test_watchdog.py
+risk: 转译层下文件事件不可靠或轮询阻塞主进程退出；触发条件：追加日志未实时读到
+owner: agent
+status: approved

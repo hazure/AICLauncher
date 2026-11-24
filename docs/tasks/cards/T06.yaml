@@ -1,0 +1,33 @@
+id: T06
+title: 运行时补丁重写画面处理
+batch: 批次三（插件改写）
+plan_ref: "PLAN.md 第五章（二）（三）— 模组接口库最小集与运行时补丁"
+depends_on:
+  - T05
+parallel_group: solo
+write_paths:
+  - plugins/ModInterface/ModInterface.cs
+  - plugins/UnmosaicPlugin/UnmosaicPlugin.cs
+  - plugins/UnmosaicPlugin/UnmosaicPlugin.csproj
+  - mods_pool/unmosaic/manifest.json
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 封装模组接口库最小集（生命周期、补丁点注册、诊断采集、版本闸门），并以运行时补丁重写去码画面处理能力及模组清单
+acceptance:
+  - id: AC-T06-1
+    cmd: test -f plugins/ModInterface/ModInterface.cs && test -f plugins/UnmosaicPlugin/UnmosaicPlugin.cs
+    expect: exit==0
+  - id: AC-T06-2
+    cmd: python3 -c "import json; d=json.load(open('mods_pool/unmosaic/manifest.json')); assert d['id']=='unmosaic' and d['rollback']=='remove'"
+    expect: exit==0
+rollback: rm -rf plugins/ModInterface plugins/UnmosaicPlugin mods_pool/unmosaic
+risk: 运行时补丁在转译层触发异常或未受版本闸门保护；触发条件：游戏版本不匹配时静默失效
+owner: agent
+status: approved

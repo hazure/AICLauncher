@@ -1,0 +1,27 @@
+id: T05
+title: 定位目标方法并出补丁点清单
+batch: 批次三（插件改写）
+plan_ref: "PLAN.md 第五章（一）— 画面处理目标方法与补丁点清单 patch_points.json"
+depends_on:
+  - T04
+parallel_group: solo
+write_paths:
+  - docs/baseline/patch_points.json
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 定位画面处理目标方法并输出经人工复核的补丁点清单 docs/baseline/patch_points.json
+acceptance:
+  - id: AC-T05-1
+    cmd: python3 -c "import json; d=json.load(open('docs/baseline/patch_points.json')); assert len(d.get('targets',[]))>=1"
+    expect: exit==0
+rollback: rm -f docs/baseline/patch_points.json
+risk: 目标方法签名随游戏版本漂移；触发条件：托管程序集更新后补丁点无法命中
+owner: agent+human
+status: approved

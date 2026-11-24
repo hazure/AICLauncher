@@ -1,0 +1,550 @@
+tasks:
+  - id: T01
+    title: 清理仓库结构并建立检查点
+    batch: 批次一（基线冻结）
+    plan_ref: "PLAN.md 第八章（四）— 检查点与基线哈希清单 baseline.json"
+    depends_on: []
+    parallel_group: solo
+    write_paths:
+      - docs/baseline/baseline.json
+      - .gitignore
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 清理仓库结构、建立可回滚检查点标签并生成基线哈希清单 docs/baseline/baseline.json
+    acceptance:
+      - id: AC-T01-1
+        cmd: python3 -c "import json; d=json.load(open('docs/baseline/baseline.json')); assert len(d)>0"
+        expect: exit==0
+      - id: AC-T01-2
+        cmd: git status --porcelain
+        expect: exit==0
+    rollback: git checkout -- .gitignore && rm -f docs/baseline/baseline.json
+    risk: 基线未锁定导致后续零污染回归无参照；触发条件：基线清单缺失或包含临时产物
+    owner: human
+    status: approved
+
+  - id: T02
+    title: 补齐说明文件与开发日志模板
+    batch: 批次一（基线冻结）
+    plan_ref: "PLAN.md 第十二章（一）— 协作说明文件 AGENTS.md 与进度台账 PROGRESS.md"
+    depends_on:
+      - T01
+    parallel_group: solo
+    write_paths:
+      - AGENTS.md
+      - docs/PROGRESS.md
+      - README.md
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 补齐仓库根协作说明文件 AGENTS.md（含第十二章架构红线、提交纪律、流水线待办占位）、进度台账模板 docs/PROGRESS.md 与构建指引 README.md
+    acceptance:
+      - id: AC-T02-1
+        cmd: test -f AGENTS.md && test -f docs/PROGRESS.md && test -f README.md
+        expect: exit==0
+      - id: AC-T02-2
+        cmd: grep -q "T13" AGENTS.md
+        expect: exit==0
+    rollback: git checkout -- README.md && rm -f AGENTS.md docs/PROGRESS.md
+    risk: 协作约束未固化导致后续智能体越界；触发条件：AGENTS.md 缺少禁止清单或待办占位
+    owner: agent
+    status: approved
+
+  - id: T03
+    title: 放置注入三件套并校验目录
+    batch: 批次二（注入打通）
+    plan_ref: "PLAN.md 第二章（四）— 插件框架注入三件套与目录校验清单"
+    depends_on:
+      - T01
+    parallel_group: solo
+    write_paths:
+      - docs/baseline/injection_trio_manifest.json
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 在游戏根目录放置插件框架注入三件套（网络劫持组件、引导配置文件、插件框架目录）并记录校验清单
+    acceptance:
+      - id: AC-T03-1
+        cmd: python3 -c "import json; d=json.load(open('docs/baseline/injection_trio_manifest.json')); assert len(d.get('paths',[]))==3"
+        expect: exit==0
+    rollback: 移除游戏根目录注入三件套并删除 docs/baseline/injection_trio_manifest.json
+    risk: 注入三件套路径或版本不匹配导致插件框架不加载；触发条件：动态库搜索顺序劫持未生效
+    owner: human
+    status: approved
+
+  - id: T04
+    title: 编写示例插件
+    batch: 批次二（注入打通）
+    plan_ref: "PLAN.md 第二章（五）— 最小示例插件与日志通道验证"
+    depends_on:
+      - T03
+    parallel_group: solo
+    write_paths:
+      - plugins/HelloPlugin/HelloPlugin.cs
+      - plugins/HelloPlugin/HelloPlugin.csproj
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 编写仅打印日志的最小示例插件，验证插件框架可随引导程序拉起并在引擎日志中输出插件行
+    acceptance:
+      - id: AC-T04-1
+        cmd: test -f plugins/HelloPlugin/HelloPlugin.cs && test -f plugins/HelloPlugin/HelloPlugin.csproj
+        expect: exit==0
+      - id: AC-T04-2
+        cmd: grep -q "HelloPlugin" plugins/HelloPlugin/HelloPlugin.cs
+        expect: exit==0
+    rollback: rm -rf plugins/HelloPlugin
+    risk: 示例插件目标框架与游戏运行时不兼容；触发条件：引擎日志未出现插件输出行
+    owner: agent
+    status: approved
+
+  - id: T05
+    title: 定位目标方法并出补丁点清单
+    batch: 批次三（插件改写）
+    plan_ref: "PLAN.md 第五章（一）— 画面处理目标方法与补丁点清单 patch_points.json"
+    depends_on:
+      - T04
+    parallel_group: solo
+    write_paths:
+      - docs/baseline/patch_points.json
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 定位画面处理目标方法并输出经人工复核的补丁点清单 docs/baseline/patch_points.json
+    acceptance:
+      - id: AC-T05-1
+        cmd: python3 -c "import json; d=json.load(open('docs/baseline/patch_points.json')); assert len(d.get('targets',[]))>=1"
+        expect: exit==0
+    rollback: rm -f docs/baseline/patch_points.json
+    risk: 目标方法签名随游戏版本漂移；触发条件：托管程序集更新后补丁点无法命中
+    owner: agent+human
+    status: approved
+
+  - id: T06
+    title: 运行时补丁重写画面处理
+    batch: 批次三（插件改写）
+    plan_ref: "PLAN.md 第五章（二）（三）— 模组接口库最小集与运行时补丁"
+    depends_on:
+      - T05
+    parallel_group: solo
+    write_paths:
+      - plugins/ModInterface/ModInterface.cs
+      - plugins/UnmosaicPlugin/UnmosaicPlugin.cs
+      - plugins/UnmosaicPlugin/UnmosaicPlugin.csproj
+      - mods_pool/unmosaic/manifest.json
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 封装模组接口库最小集（生命周期、补丁点注册、诊断采集、版本闸门），并以运行时补丁重写去码画面处理能力及模组清单
+    acceptance:
+      - id: AC-T06-1
+        cmd: test -f plugins/ModInterface/ModInterface.cs && test -f plugins/UnmosaicPlugin/UnmosaicPlugin.cs
+        expect: exit==0
+      - id: AC-T06-2
+        cmd: python3 -c "import json; d=json.load(open('mods_pool/unmosaic/manifest.json')); assert d['id']=='unmosaic' and d['rollback']=='remove'"
+        expect: exit==0
+    rollback: rm -rf plugins/ModInterface plugins/UnmosaicPlugin mods_pool/unmosaic
+    risk: 运行时补丁在转译层触发异常或未受版本闸门保护；触发条件：游戏版本不匹配时静默失效
+    owner: agent
+    status: approved
+
+  - id: T07
+    title: 零污染回归验证
+    batch: 批次三（插件改写）
+    plan_ref: "PLAN.md 第三章（四）— 零污染回归验证与哈希基线比对"
+    depends_on:
+      - T06
+    parallel_group: solo
+    write_paths:
+      - docs/baseline/zero_pollution_report.json
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 验证开启与关闭去码插件后，游戏行为与原始文件哈希均回到 docs/baseline/baseline.json 基线状态
+    acceptance:
+      - id: AC-T07-1
+        cmd: python3 -c "import json; d=json.load(open('docs/baseline/zero_pollution_report.json')); assert d.get('hash_match') is True"
+        expect: exit==0
+    rollback: 清空插件生效目录并对照 docs/baseline/baseline.json 核验哈希
+    risk: 插件或框架残留文件污染游戏目录；触发条件：关闭插件后哈希与基线不一致
+    owner: human
+    status: approved
+
+  - id: T08
+    title: 配置模块与默认值回落
+    batch: 批次四（无头启动器）
+    plan_ref: "PLAN.md 第三章（一）（二）— 配置模块 launcher/config.py 与五段式配置"
+    depends_on:
+      - T01
+    parallel_group: solo
+    write_paths:
+      - launcher/__init__.py
+      - launcher/config.py
+      - launcher/launcher.ini.example
+      - tests/test_config.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 实现启动器包骨架与五段式配置解析模块 launcher/config.py，支持缺失项回落默认值并输出日志
+    acceptance:
+      - id: AC-T08-1
+        cmd: python3 -m unittest tests/test_config.py
+        expect: exit==0
+    rollback: rm -rf launcher/__init__.py launcher/config.py launcher/launcher.ini.example tests/test_config.py
+    risk: 硬编码绝对路径或配置段缺失导致启动器崩溃；触发条件：配置文件缺少可选键
+    owner: agent
+    status: approved
+
+  - id: T09
+    title: 预检模块与双哈希校验
+    batch: 批次四（无头启动器）
+    plan_ref: "PLAN.md 第三章（四）— 预检模块 launcher/preflight.py 与双哈希校验"
+    depends_on:
+      - T08
+    parallel_group: batch4_modules
+    write_paths:
+      - launcher/preflight.py
+      - tests/test_preflight.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 实现预检模块 launcher/preflight.py，完成校验清单哈希与托管程序集内容哈希双重校验，失败时拒绝启动
+    acceptance:
+      - id: AC-T09-1
+        cmd: python3 -m unittest tests/test_preflight.py
+        expect: exit==0
+    rollback: rm -f launcher/preflight.py tests/test_preflight.py
+    risk: 预检未拦截版本漂移或误自动修复；触发条件：文件被篡改后仍返回通过
+    owner: agent
+    status: approved
+
+  - id: T10
+    title: 模组双目录幂等同步
+    batch: 批次四（无头启动器）
+    plan_ref: "PLAN.md 第三章（五）— 模组双目录管理模块 launcher/modmanager.py"
+    depends_on:
+      - T08
+    parallel_group: batch4_modules
+    write_paths:
+      - launcher/modmanager.py
+      - tests/test_modmanager.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 实现模组双目录管理模块 launcher/modmanager.py，按开关在 mods_pool 与插件目录间幂等搬迁组件
+    acceptance:
+      - id: AC-T10-1
+        cmd: python3 -m unittest tests/test_modmanager.py
+        expect: exit==0
+    rollback: rm -f launcher/modmanager.py tests/test_modmanager.py
+    risk: 反复启停后插件目录残留或误覆盖游戏原始文件；触发条件：同步操作非幂等
+    owner: agent
+    status: approved
+
+  - id: T11
+    title: 环境构建与预设表
+    batch: 批次四（无头启动器）
+    plan_ref: "PLAN.md 第三章（一）— 环境构建模块 launcher/envbuilder.py"
+    depends_on:
+      - T08
+    parallel_group: batch4_modules
+    write_paths:
+      - launcher/envbuilder.py
+      - tests/test_envbuilder.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 实现环境构建模块 launcher/envbuilder.py，依据画质预设与第十一章环境变量速查表生成环境变量字典与引擎参数串
+    acceptance:
+      - id: AC-T11-1
+        cmd: python3 -m unittest tests/test_envbuilder.py
+        expect: exit==0
+    rollback: rm -f launcher/envbuilder.py tests/test_envbuilder.py
+    risk: 转译层内存强度或调试变量映射错误；触发条件：输出与预设表不一致
+    owner: agent
+    status: approved
+
+  - id: T12
+    title: 进程拉起与工作目录约束
+    batch: 批次四（无头启动器）
+    plan_ref: "PLAN.md 第三章（三）— 进程拉起模块 launcher/spawner.py"
+    depends_on:
+      - T09
+      - T11
+    parallel_group: solo
+    write_paths:
+      - launcher/spawner.py
+      - tests/test_spawner.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 实现进程拉起模块 launcher/spawner.py，强制将工作目录设为游戏根目录并透传环境变量与参数拉起 stub.exe
+    acceptance:
+      - id: AC-T12-1
+        cmd: python3 -m unittest tests/test_spawner.py
+        expect: exit==0
+    rollback: rm -f launcher/spawner.py tests/test_spawner.py
+    risk: 工作目录错位导致 UnityPlayer.dll 或日志路径解析失败；触发条件：cwd 非游戏根目录
+    owner: agent
+    status: approved
+
+  - id: T13
+    title: 命令行入口串联
+    batch: 批次四（无头启动器）
+    plan_ref: "PLAN.md 第三章（一）（三）— 命令行入口 launcher/cli.py"
+    depends_on:
+      - T09
+      - T10
+      - T11
+      - T12
+    parallel_group: solo
+    write_paths:
+      - launcher/cli.py
+      - tests/test_cli.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 实现命令行入口 launcher/cli.py，串联预检、模组同步、环境构建与进程拉起，支持一条命令完成启动流程
+    acceptance:
+      - id: AC-T13-1
+        cmd: python3 -m unittest tests/test_cli.py
+        expect: exit==0
+      - id: AC-T13-2
+        cmd: python3 -m launcher.cli --help
+        expect: exit==0
+    rollback: rm -f launcher/cli.py tests/test_cli.py
+    risk: 模块间契约不匹配导致串联失败；触发条件：参数或退出码传递异常
+    owner: agent
+    status: approved
+
+  - id: T14
+    title: 看门狗线程与尾部读取
+    batch: 批次五（自愈看门狗）
+    plan_ref: "PLAN.md 第四章（一）— 看门狗独立线程与双通道尾部读取"
+    depends_on:
+      - T13
+    parallel_group: solo
+    write_paths:
+      - launcher/watchdog.py
+      - tests/test_watchdog.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 实现看门狗独立线程与 800ms 轮询尾部读取逻辑（覆盖引擎日志与插件框架日志双通道）
+    acceptance:
+      - id: AC-T14-1
+        cmd: python3 -m unittest tests/test_watchdog.py
+        expect: exit==0
+    rollback: rm -f launcher/watchdog.py tests/test_watchdog.py
+    risk: 转译层下文件事件不可靠或轮询阻塞主进程退出；触发条件：追加日志未实时读到
+    owner: agent
+    status: approved
+
+  - id: T15
+    title: 特征库与处置建议
+    batch: 批次五（自愈看门狗）
+    plan_ref: "PLAN.md 第四章（二）— 错误特征库 launcher/signatures.json 与处置矩阵"
+    depends_on:
+      - T14
+    parallel_group: solo
+    write_paths:
+      - launcher/signatures.json
+      - tests/test_signatures.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 建立第四章八条错误特征库 launcher/signatures.json 及处置动作匹配测试，确保合成日志八条全命中
+    acceptance:
+      - id: AC-T15-1
+        cmd: python3 -m unittest tests/test_signatures.py
+        expect: exit==0
+      - id: AC-T15-2
+        cmd: python3 -c "import json; d=json.load(open('launcher/signatures.json')); assert len(d)==8"
+        expect: exit==0
+    rollback: rm -f launcher/signatures.json tests/test_signatures.py
+    risk: 特征串误报或遗漏；触发条件：合成日志未命中全部八条特征
+    owner: agent+human
+    status: approved
+
+  - id: T16
+    title: 处置报告与回滚记录
+    batch: 批次五（自愈看门狗）
+    plan_ref: "PLAN.md 第四章（三）— 处置报告生成器 launcher/reporter.py"
+    depends_on:
+      - T15
+    parallel_group: solo
+    write_paths:
+      - launcher/reporter.py
+      - tests/test_reporter.py
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 实现处置报告生成器 launcher/reporter.py，遵守只建议不擅改、动作可回滚、留痕优先原则，记录完整回滚信息
+    acceptance:
+      - id: AC-T16-1
+        cmd: python3 -m unittest tests/test_reporter.py
+        expect: exit==0
+    rollback: rm -f launcher/reporter.py tests/test_reporter.py
+    risk: 自动动作未留存回滚信息或擅自修改存档/配置；触发条件：报告缺少回滚字段
+    owner: agent
+    status: approved
+
+  - id: T17
+    title: 流水线配置与架构自检
+    batch: 批次六（流水线接入）
+    plan_ref: "PLAN.md 第六章（二）（三）— 四阶段 CI 流水线与三条红线自检"
+    depends_on:
+      - T13
+    parallel_group: solo
+    write_paths:
+      - .github/workflows/ci.yml
+      - scripts/check_arch.sh
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 落地四阶段 CI 流水线配置与架构自检脚本，守住交叉编译架构、仓库体积、凭据保护三条红线
+    acceptance:
+      - id: AC-T17-1
+        cmd: test -f .github/workflows/ci.yml && test -x scripts/check_arch.sh
+        expect: exit==0
+      - id: AC-T17-2
+        cmd: grep -q "aarch64" scripts/check_arch.sh
+        expect: exit==0
+    rollback: rm -f .github/workflows/ci.yml scripts/check_arch.sh
+    risk: 流水线包含明文凭据或未检查产物架构；触发条件：Secrets 未隔离或缺少 aarch64 校验
+    owner: agent
+    status: approved
+
+  - id: T18
+    title: 文档站增补与自动化挂载
+    batch: 批次七（文档同步）
+    plan_ref: "PLAN.md 第七章（二）（三）— 文档站章节增补与自动化审查挂载"
+    depends_on:
+      - T17
+    parallel_group: solo
+    write_paths:
+      - docs/index.html
+      - docs/guide/quickstart.md
+      - docs/guide/faq.md
+      - .github/workflows/docs-audit.yml
+    forbidden_paths:
+      - src/stub_perfect.c
+      - "*.keystore"
+      - "rootfs*"
+      - AliceInCradle.exe
+      - UnityPlayer.dll
+      - Assembly-CSharp.dll
+      - "AliceInCradle_Data/**"
+      - "download_urls*"
+    goal: 按第七章清单增补文档站七个章节内容并挂载文档站自动化双视口审查工作流
+    acceptance:
+      - id: AC-T18-1
+        cmd: test -f docs/index.html && test -f .github/workflows/docs-audit.yml
+        expect: exit==0
+    rollback: git checkout -- docs/index.html docs/guide/quickstart.md docs/guide/faq.md && rm -f .github/workflows/docs-audit.yml
+    risk: 文档与代码实现漂移或手机视口横向溢出；触发条件：双视口审查未通过
+    owner: agent
+    status: approved

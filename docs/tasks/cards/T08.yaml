@@ -1,0 +1,30 @@
+id: T08
+title: 配置模块与默认值回落
+batch: 批次四（无头启动器）
+plan_ref: "PLAN.md 第三章（一）（二）— 配置模块 launcher/config.py 与五段式配置"
+depends_on:
+  - T01
+parallel_group: solo
+write_paths:
+  - launcher/__init__.py
+  - launcher/config.py
+  - launcher/launcher.ini.example
+  - tests/test_config.py
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 实现启动器包骨架与五段式配置解析模块 launcher/config.py，支持缺失项回落默认值并输出日志
+acceptance:
+  - id: AC-T08-1
+    cmd: python3 -m unittest tests/test_config.py
+    expect: exit==0
+rollback: rm -rf launcher/__init__.py launcher/config.py launcher/launcher.ini.example tests/test_config.py
+risk: 硬编码绝对路径或配置段缺失导致启动器崩溃；触发条件：配置文件缺少可选键
+owner: agent
+status: approved

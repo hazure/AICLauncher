@@ -1,0 +1,30 @@
+id: T01
+title: 清理仓库结构并建立检查点
+batch: 批次一（基线冻结）
+plan_ref: "PLAN.md 第八章（四）— 检查点与基线哈希清单 baseline.json"
+depends_on: []
+parallel_group: solo
+write_paths:
+  - docs/baseline/baseline.json
+  - .gitignore
+forbidden_paths:
+  - src/stub_perfect.c
+  - "*.keystore"
+  - "rootfs*"
+  - AliceInCradle.exe
+  - UnityPlayer.dll
+  - Assembly-CSharp.dll
+  - "AliceInCradle_Data/**"
+  - "download_urls*"
+goal: 清理仓库结构、建立可回滚检查点标签并生成基线哈希清单 docs/baseline/baseline.json
+acceptance:
+  - id: AC-T01-1
+    cmd: python3 -c "import json; d=json.load(open('docs/baseline/baseline.json')); assert len(d)>0"
+    expect: exit==0
+  - id: AC-T01-2
+    cmd: git status --porcelain
+    expect: exit==0
+rollback: git checkout -- .gitignore && rm -f docs/baseline/baseline.json
+risk: 基线未锁定导致后续零污染回归无参照；触发条件：基线清单缺失或包含临时产物
+owner: human
+status: approved
