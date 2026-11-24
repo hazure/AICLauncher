@@ -30,4 +30,4 @@ acceptance:
 rollback: rm -rf plugins/ModInterface plugins/UnmosaicPlugin mods_pool/unmosaic
 risk: 运行时补丁在转译层触发异常或未受版本闸门保护；触发条件：游戏版本不匹配时静默失效
 owner: agent
-status: approved
+status: done
