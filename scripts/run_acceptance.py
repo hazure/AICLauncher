@@ -138,7 +138,9 @@ def main() -> int:
         if args.twice:
             proc2 = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             combined2 = (proc2.stdout or "") + (proc2.stderr or "")
-            idempotent = (proc.returncode == proc2.returncode) and (combined.strip() == combined2.strip())
+            norm1 = re.sub(r"in \d+\.\d+s", "in <time>", combined.strip())
+            norm2 = re.sub(r"in \d+\.\d+s", "in <time>", combined2.strip())
+            idempotent = (proc.returncode == proc2.returncode) and (norm1 == norm2)
             if not idempotent:
                 all_idempotent = False
 
