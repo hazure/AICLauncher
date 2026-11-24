@@ -27,4 +27,4 @@ acceptance:
 rollback: git checkout -- .gitignore && rm -f docs/baseline/baseline.json
 risk: 基线未锁定导致后续零污染回归无参照；触发条件：基线清单缺失或包含临时产物
 owner: human
-status: approved
+status: done

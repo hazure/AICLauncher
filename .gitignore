@@ -13,3 +13,6 @@ __pycache__/
 *.swp
 *~
 *.exe
+
+# Acceptance logs
+out/
