@@ -242,7 +242,7 @@ tasks:
     rollback: rm -rf launcher/__init__.py launcher/config.py launcher/launcher.ini.example tests/test_config.py
     risk: 硬编码绝对路径或配置段缺失导致启动器崩溃；触发条件：配置文件缺少可选键
     owner: agent
-    status: approved
+    status: done
 
   - id: T09
     title: 预检模块与双哈希校验
