@@ -14,4 +14,4 @@
   * [编译器支持](guide/compiler.md)
   * [FAQ](guide/faq.md)
 * [法律声明](disclaimer.md)
-* [GitHub 仓库](https://github.com/hazure/alice-in-cradle-030-vm-patch)
+* [GitHub 仓库](https://github.com/hazure/AliceInCradle-Android-Compat-Patch)
