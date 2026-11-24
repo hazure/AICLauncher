@@ -3,13 +3,13 @@
 [![Target: Alice in Cradle v0.30](https://img.shields.io/badge/Target-v0.30-success.svg)]()
 [![Platform: Android / Wine](https://img.shields.io/badge/Platform-Android%20%7C%20Wine-orange.svg)]()
 [![Docs](https://img.shields.io/badge/Docs-在线文档-brightgreen.svg)](https://hazure.github.io/AliceInCradle-Android-Compat-Patch/)
-[![Branch: nocheck_dev (Experimental)](https://img.shields.io/badge/Branch-nocheck__dev%20(Experimental)-red.svg)]()
+[![Branch: dev (Verified)](https://img.shields.io/badge/Branch-dev%20(Verified)-blue.svg)]()
 
 用于让《Alice in Cradle》（ver0.30，Windows 版）在安卓端容器（Winlator、Termux-X11、Box64 + Wine 等）下正常启动和稳定运行的本地兼容补丁与辅助脚本。
 
-> [!CAUTION]
-> **当前分支：`nocheck_dev`（超前线 · 未验证实验分支）**
-> 存放未经完整验证的实验性改动，最不稳定，可能出现崩溃或异常。**使用前请务必备份游戏文件和存档，不要用于日常游玩**；正常使用请切回 `main` 或 `dev`。
+> [!IMPORTANT]
+> **当前分支：`dev`（经验证的前线分支）**
+> 包含已经过基础验证的新功能和优化，合入 `main` 前会先放这里。求稳请切回 `main`，未验证的实验功能在 `nocheck_dev`。
 
 ## 包含内容
 
@@ -24,8 +24,8 @@
 ## 分支说明
 
 - **`main`（稳定主线）**：经过测试的稳定版本，日常使用推荐。
-- **`dev`（经验证的前线分支）**：已完成基础验证的新功能和优化，合入 `main` 前会先放这里。
-- **`nocheck_dev`（超前线实验分支 · 最不稳定 · 当前分支）**：未验证的实验性功能，使用前请先备份游戏和存档。
+- **`dev`（经验证的前线分支 · 当前分支）**：已完成基础验证的新功能和优化，合入 `main` 前会先放这里。
+- **`nocheck_dev`（超前线实验分支 · 最不稳定）**：未验证的实验性功能，使用前请先备份游戏和存档。
 
 ## 简单用法
 
