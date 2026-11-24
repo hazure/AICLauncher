@@ -13,3 +13,17 @@ __pycache__/
 *.swp
 *~
 *.exe
+
+# Signing keys & secrets (must use GitHub Secrets)
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+
+# RootFS archives & images (must not be committed)
+*rootfs*.tar*
+*.squashfs
+*.img
+*.ext4
+*.iso

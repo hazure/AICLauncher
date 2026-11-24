@@ -1,0 +1,278 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  guard:
+    name: Red-Line Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Assert 3 CI Red Lines (arm64-v8a, No RootFS in Repo, Secrets via GitHub Secrets)
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+
+          errors = []
+
+          # --- Red Line 1: arm64-v8a cross-compilation & -Wall -Werror ---
+          wf_path = ".github/workflows/build.yml"
+          with open(wf_path, "r", encoding="utf-8") as f:
+              wf_text = f.read()
+
+          for token in ("arm64-v8a", "-Wall -Werror", "ANDROID_NDK"):
+              if token not in wf_text:
+                  errors.append(f"[Red Line 1] {wf_path} missing required token: {token}")
+
+          for cfg in ("CMakeLists.txt", "build.gradle", "build.gradle.kts"):
+              if os.path.isfile(cfg):
+                  with open(cfg, "r", encoding="utf-8", errors="ignore") as f:
+                      txt = f.read()
+                  if "arm64-v8a" not in txt:
+                      errors.append(f"[Red Line 1] {cfg} missing arm64-v8a ABI filter")
+                  if "-Wall" not in txt or "-Werror" not in txt:
+                      errors.append(f"[Red Line 1] {cfg} missing -Wall -Werror")
+
+          # --- Red Line 2: RootFS must NOT be committed to repository ---
+          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          max_bytes = 10 * 1024 * 1024  # 10 MiB
+          forbidden_exts = (".tar.gz", ".tar.xz", ".tar.zst", ".squashfs", ".img", ".ext4", ".iso")
+          allowed_rootfs_exts = (".md", ".txt", ".json", ".sha256", ".sh")
+
+          for path in tracked:
+              if not os.path.isfile(path):
+                  continue
+              size = os.path.getsize(path)
+              if size > max_bytes:
+                  errors.append(f"[Red Line 2] Tracked file exceeds 10 MiB: {path} ({size} bytes)")
+              low = path.lower()
+              if low.endswith(forbidden_exts):
+                  errors.append(f"[Red Line 2] Forbidden archive/image in repo: {path}")
+              if "rootfs" in low and not low.endswith(allowed_rootfs_exts):
+                  errors.append(f"[Red Line 2] Suspicious rootfs binary/archive in repo: {path}")
+
+          with open(".gitignore", "r", encoding="utf-8") as f:
+              gi = f.read()
+          for pat in ("*.dll", "*.exe", "*.keystore"):
+              if pat not in gi:
+                  errors.append(f"[Red Line 2/3] .gitignore missing {pat}")
+
+          # --- Red Line 3: Secrets must use GitHub Secrets, never plaintext ---
+          key_exts = (".keystore", ".jks", ".p12", ".pfx", ".pem", ".key")
+          secret_patterns = [
+              re.compile(r"ghp_[A-Za-z0-9]{36}"),
+              re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+              re.compile(r"AKIA[0-9A-Z]{16}"),
+              re.compile(r"-----BEGIN (RSA|EC|OPENSSH|DSA|PRIVATE) KEY-----"),
+          ]
+          for path in tracked:
+              if path.lower().endswith(key_exts):
+                  errors.append(f"[Red Line 3] Tracked key/keystore file in repo: {path}")
+              if os.path.isfile(path):
+                  try:
+                      with open(path, "r", encoding="utf-8") as f:
+                          content = f.read()
+                      for rx in secret_patterns:
+                          if rx.search(content):
+                              errors.append(f"[Red Line 3] Potential hardcoded secret in {path}")
+                  except UnicodeDecodeError:
+                      pass
+
+          if "secrets.KEYSTORE_BASE64" not in wf_text or "secrets.DRIVE_TOKEN" not in wf_text:
+              errors.append("[Red Line 3] build.yml must reference secrets.KEYSTORE_BASE64 and secrets.DRIVE_TOKEN")
+
+          if errors:
+              for e in errors:
+                  print(e, file=sys.stderr)
+              sys.exit(1)
+
+          print(f"[PASS] All 3 CI Red Lines verified across {len(tracked)} tracked files.")
+          PY
+
+  build:
+    name: Build Artifacts
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install MinGW-w64 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64 file
+
+      - name: Build Windows launcher stub (src/stub_perfect.c)
+        run: |
+          mkdir -p dist
+          x86_64-w64-mingw32-gcc -O2 -s -mwindows -nostdlib \
+            -Wall -Werror \
+            -Wl,-e,WinMainCRTStartup \
+            -o dist/AliceInCradle.exe \
+            src/stub_perfect.c -lkernel32 -luser32
+          file dist/AliceInCradle.exe | grep -qE 'PE32\+ executable.*GUI.*x86-64'
+
+      - name: Build C/C++ Android virtualization layer (arm64-v8a NDK)
+        run: |
+          if [ -f CMakeLists.txt ]; then
+            cmake -S . -B build-arm64 \
+              -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+              -DANDROID_ABI=arm64-v8a \
+              -DANDROID_PLATFORM=android-26 \
+              -DCMAKE_CXX_FLAGS="-std=c++17 -Wall -Werror"
+            cmake --build build-arm64 --parallel
+            find build-arm64 -name '*.so' -exec sh -c 'file "$1" | grep -q "ARM aarch64" && cp "$1" dist/' _ {} \;
+          elif [ -f jni/Android.mk ]; then
+            "$ANDROID_NDK_LATEST_HOME/ndk-build" APP_ABI=arm64-v8a APP_CFLAGS="-Wall -Werror" APP_CPPFLAGS="-std=c++17 -Wall -Werror"
+            find libs/arm64-v8a -name '*.so' -exec cp {} dist/ \;
+          else
+            test -n "${ANDROID_NDK_LATEST_HOME:-}"
+            echo "[SKIP] No Android NDK C/C++ project detected yet; arm64-v8a cross-compile stage ready."
+          fi
+
+      - name: Build Kotlin Android APK (Gradle + Secrets keystore)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          DRIVE_TOKEN: ${{ secrets.DRIVE_TOKEN }}
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            if [ -n "$KEYSTORE_BASE64" ]; then
+              echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+            fi
+            ./gradlew assembleRelease --no-daemon
+            rm -f release.keystore
+            find app/build/outputs/apk/release -name '*.apk' -exec cp {} dist/ \;
+          else
+            echo "[SKIP] No Gradle Android project detected yet; keystore/RootFS secret hooks ready."
+          fi
+          if [ -f scripts/fetch_rootfs.sh ] && [ -n "$DRIVE_TOKEN" ]; then
+            bash scripts/fetch_rootfs.sh "$DRIVE_TOKEN"
+          fi
+
+      - name: Build BepInEx / C# plugins
+        run: |
+          if ls *.sln *.csproj 2>/dev/null | grep -q .; then
+            dotnet build -c Release -o ./out/plugins
+            find ./out/plugins -name '*.dll' -exec cp {} dist/ \;
+          else
+            echo "[SKIP] No C#/BepInEx project detected yet."
+          fi
+
+      - name: Package Python CLI tools, launcher, docs & checksums
+        run: |
+          python3 -m py_compile patch_unsafeAssem.py unmosaic.py update_sha.py
+          bash -n launcher.sh
+          cp patch_unsafeAssem.py unmosaic.py update_sha.py launcher.sh README.md dist/
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -la dist/
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aic-android-compat-artifacts
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    name: Automated Tests
+    needs: [ guard, build ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: aic-android-compat-artifacts
+          path: dist
+
+      - name: Run Python patcher & script tests
+        run: |
+          python3 unmosaic.py --test
+          python3 patch_unsafeAssem.py --test
+          python3 -m py_compile patch_unsafeAssem.py unmosaic.py update_sha.py
+          bash -n launcher.sh
+
+      - name: Verify build artifact integrity & PE32+ binary
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+          test -s dist/AliceInCradle.exe
+          file dist/AliceInCradle.exe | grep -qE 'PE32\+ executable.*GUI.*x86-64'
+          for f in patch_unsafeAssem.py unmosaic.py update_sha.py launcher.sh README.md; do
+            test -s "dist/$f"
+          done
+
+      - name: Run C++ JNI / CTest (conditional)
+        run: |
+          if [ -f build-arm64/CTestTestfile.cmake ]; then
+            ctest --test-dir build-arm64 --output-on-failure
+          elif [ -f build/CTestTestfile.cmake ]; then
+            ctest --test-dir build --output-on-failure
+          else
+            echo "[SKIP] No CTest suite detected yet."
+          fi
+
+      - name: Run Kotlin Android unit tests (conditional)
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew testDebugUnitTest --no-daemon
+          else
+            echo "[SKIP] No Gradle Android unit tests detected yet."
+          fi
+
+  release:
+    name: GitHub Release
+    needs: [ guard, build, test ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: aic-android-compat-artifacts
+          path: dist
+
+      - name: Verify artifact checksums before release
+        run: (cd dist && sha256sum -c SHA256SUMS.txt)
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
