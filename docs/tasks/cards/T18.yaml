@@ -27,4 +27,4 @@ acceptance:
 rollback: git checkout -- docs/index.html docs/guide/quickstart.md docs/guide/faq.md && rm -f .github/workflows/docs-audit.yml
 risk: 文档与代码实现漂移或手机视口横向溢出；触发条件：双视口审查未通过
 owner: agent
-status: approved
+status: done
