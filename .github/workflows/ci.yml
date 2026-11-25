@@ -4,24 +4,98 @@ on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
+    # 忽略纯文档改动，避免无意义的 CI 触发
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches: [ main ]
+    # PR 同样忽略 md 与 docs 目录改动
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  # 支持在 GitHub Actions 页面手动触发
+  workflow_dispatch:
 
 jobs:
+  # 并行 Job 1：构建产物（AAR）并保留原有架构/门禁检查
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # [需人工确认] 保留原 CI 自定义检查：预编译原生库架构检查
       - name: Check architecture of any prebuilt native libs
         run: bash scripts/check_arch.sh
+
+      # [需人工确认] 保留原 CI 自定义检查：RootFS 门禁校验
       - name: Verify no RootFS entity in repo
         run: python3 scripts/gate_check.py --card docs/tasks/cards/T17.yaml --gates G5,G6
 
+      # 配置 JDK 17（Temurin 发行版）
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 配置 Android SDK 环境
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 配置 Gradle 并启用 basic 缓存提供者以提升缓存命中率
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-provider: basic
+
+      # [需人工确认] 执行 Gradle 构建；当前 client/android 为 application 插件，若需产出 AAR 请确认模块插件类型或产物路径
+      - name: Build Android AAR
+        working-directory: client/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+
+      # 上传 AAR 构建产物供后续 release Job 使用
+      - name: Upload AAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-sdk-aar
+          path: client/android/**/build/outputs/aar/*.aar
+          # 若模块尚未切换为 library，先以 warn 避免阻断，待人工确认后可改为 error
+          if-no-files-found: warn
+
+  # 并行 Job 2：单元测试（与 build/lint 并行，移除原 needs: build 串行依赖）
   test:
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 配置 JDK 17（Temurin 发行版）
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 配置 Android SDK 环境
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 配置 Gradle 并启用 basic 缓存提供者
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-provider: basic
+
+      # 运行 Android 单元测试
+      - name: Run Gradle unit tests
+        working-directory: client/android
+        run: |
+          chmod +x gradlew
+          ./gradlew test --stacktrace
+
+      # [需人工确认] 保留原 CI Python 环境及自定义测试步骤
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -30,17 +104,61 @@ jobs:
       - name: Run unmosaic self-test
         run: python3 unmosaic.py --test || true
 
+  # 并行 Job 3：代码静态检查（新增，与 build/test 并行）
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 配置 JDK 17（Temurin 发行版）
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 配置 Android SDK 环境
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 配置 Gradle 并启用 basic 缓存提供者
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-provider: basic
+
+      # 运行 Android Lint 静态检查
+      - name: Run Gradle lint
+        working-directory: client/android
+        run: |
+          chmod +x gradlew
+          ./gradlew lint --stacktrace
+
+  # 发布 Job：仅在打 v* 标签且 build/test/lint 全部通过后触发
   release:
-    needs: test
+    needs: [ build, test, lint ]
+    runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     environment: production-release
     steps:
       - uses: actions/checkout@v4
+
+      # 下载 build Job 上传的 AAR 产物
+      - name: Download AAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-sdk-aar
+          path: release-artifacts
+
+      # [需人工确认] 保留原 CI 签名密钥解码步骤，密钥严格通过 GitHub Secrets 注入，禁止明文
       - name: Decode keystore from Secrets
         run: echo '${{ secrets.KEYSTORE_BASE64 }}' | base64 -d > release.keystore
+
+      # [需人工确认] 保留原 CI Release 附件配置，并补充 AAR 产物
       - name: Attach release artifacts
         uses: softprops/action-gh-release@v2
         with:
           files: |
             README.md
             docs/baseline/baseline.json
+            release-artifacts/**/*.aar
