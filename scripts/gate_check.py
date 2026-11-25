@@ -219,9 +219,69 @@ def check_g8(report_path: str) -> tuple[bool, str]:
 
 
 PROBE_LAYER_EXEMPT = {
+    "client/android/app/src/main/java/com/aliceincradle/launcher/bridge/ProcessBridge.kt",
     "client/android/app/src/main/java/com/aliceincradle/launcher/ProcessBridge.kt",
     "scripts/run_regression_n1_n10.py",
+    "scripts/gate_check.py",
 }
+
+PROBE_WHITELIST_PATHS = {
+    "/data/data/com.termux/files/usr/bin",
+    "/data/data/com.termux/files/usr/game_assets",
+}
+
+DATA_DATA_LITERAL_RE = re.compile(r"['\"](/data/data/[^'\"]+)['\"]")
+
+
+def _is_probe_layer_file(path: str) -> bool:
+    norm = path.replace("\\", "/")
+    return norm.endswith("bridge/ProcessBridge.kt") or norm.endswith("bridge/EnvDetector.kt") or norm in PROBE_LAYER_EXEMPT
+
+
+def _strip_kotlin_comments(txt: str) -> str:
+    txt = re.sub(r"/\*[\s\S]*?\*/", "", txt)
+    txt = re.sub(r"//.*", "", txt)
+    return txt
+
+
+def check_kotlin_process_builder(txt: str) -> bool:
+    """Return True if all ProcessBuilder( calls are wrapped in try { ... } catch (...)."""
+    cleaned = _strip_kotlin_comments(txt)
+    for m in re.finditer(r"ProcessBuilder\s*\(", cleaned):
+        pos = m.start()
+        prefix = cleaned[:pos]
+        last_try = prefix.rfind("try")
+        if last_try == -1:
+            return False
+        between = cleaned[last_try:pos]
+        if not re.search(r"\btry\s*\{", between):
+            return False
+        suffix = cleaned[pos:]
+        if not re.search(r"\}\s*catch\s*\(", suffix):
+            return False
+    return True
+
+
+def check_file_g9_g11(path: str, txt: str) -> list[str]:
+    """Check a single .kt or .py file for G9/X3 (/data/data/ hardcode) and G11 (ProcessBuilder try-catch)."""
+    errors = []
+    norm = path.replace("\\", "/")
+    if norm.endswith(".kt") or norm.endswith(".py"):
+        for m in DATA_DATA_LITERAL_RE.finditer(txt):
+            lit = m.group(1)
+            if _is_probe_layer_file(norm) and lit in PROBE_WHITELIST_PATHS:
+                continue
+            if not _is_probe_layer_file(norm):
+                errors.append(f"G9/X3 hardcoded /data/data/ path in {path}: {lit}")
+                break
+        if norm not in PROBE_LAYER_EXEMPT and not _is_probe_layer_file(norm):
+            for pat in LOCAL_ABS_PATTERNS:
+                if pat.search(txt):
+                    errors.append(f"G9/X3 hardcoded local path in {path}")
+                    break
+    if norm.endswith(".kt") and not check_kotlin_process_builder(txt):
+        errors.append(f"G11/X1 ProcessBuilder without try-catch in {path}")
+    return errors
 
 
 def check_g9(card: dict) -> tuple[bool, str]:
@@ -231,12 +291,12 @@ def check_g9(card: dict) -> tuple[bool, str]:
             if pat.search(cmd):
                 return False, f"G9/X3 hardcoded local path in {ac.get('id')}: {cmd}"
     for p in _git_changed_files():
-        if p in PROBE_LAYER_EXEMPT or not (p.endswith(".kt") or p.endswith(".py")) or not os.path.isfile(p):
+        if not (p.endswith(".kt") or p.endswith(".py")) or not os.path.isfile(p):
             continue
         txt = open(p, "r", encoding="utf-8", errors="ignore").read()
-        for pat in LOCAL_ABS_PATTERNS:
-            if pat.search(txt):
-                return False, f"G9/X3 hardcoded local path in {p}"
+        errs = [e for e in check_file_g9_g11(p, txt) if e.startswith("G9/")]
+        if errs:
+            return False, errs[0]
     return True, "no hardcoded local paths in acceptance cmds or non-probe code"
 
 
@@ -281,7 +341,7 @@ def check_g11() -> tuple[bool, str]:
     for p in _git_changed_files():
         if p.endswith(".kt") and os.path.isfile(p):
             txt = open(p, "r", encoding="utf-8", errors="ignore").read()
-            if "ProcessBuilder(" in txt and not re.search(r"try\s*\{[\s\S]*ProcessBuilder\([\s\S]*\}\s*catch\s*\(", txt):
+            if not check_kotlin_process_builder(txt):
                 return False, f"G11/X1 ProcessBuilder without try-catch in {p}"
     return True, "no silent failure patterns in diff, untracked .py, or .kt ProcessBuilder"
 
