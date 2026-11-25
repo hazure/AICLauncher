@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,8 +43,37 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun LauncherScreen() {
     val context = LocalContext.current
-    var statusText by remember { mutableStateOf("状态：待预检") }
+    var envStatus by remember { mutableStateOf(EnvironmentStatus.MISSING_PYTHON) }
+    var statusText by remember { mutableStateOf("状态：正在探测环境...") }
+    var buttonText by remember { mutableStateOf("开始游戏") }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
+    fun applyEnvironmentReport(report: EnvironmentReport) {
+        envStatus = report.status
+        when (report.status) {
+            EnvironmentStatus.READY -> {
+                statusText = "状态：环境就绪"
+                buttonText = "开始游戏"
+            }
+            EnvironmentStatus.MISSING_PYTHON -> {
+                statusText = "环境缺失：未检测到运行环境，请确认 Termux 已安装"
+                buttonText = "开始游戏（需安装环境）"
+            }
+            EnvironmentStatus.MISSING_GAME -> {
+                statusText = "环境缺失：未检测到游戏目录"
+                buttonText = "开始游戏（缺少游戏目录）"
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val sandboxDir = context.filesDir
+        Thread {
+            ProcessBridge.checkEnvironment(sandboxDir) { report ->
+                mainHandler.post { applyEnvironmentReport(report) }
+            }
+        }.start()
+    }
 
     Column(
         modifier = Modifier
@@ -58,19 +88,33 @@ fun LauncherScreen() {
         Spacer(modifier = Modifier.height(24.dp))
         Button(onClick = {
             statusText = "状态：正在预检..."
-            val workDir = context.filesDir
+            val sandboxDir = context.filesDir
             Thread {
-                val result = ProcessBridge.runPreflight(workDir)
+                val result = ProcessBridge.runPreflight(sandboxDir)
                 mainHandler.post {
                     when (result) {
                         is CommandResult.Success -> {
+                            envStatus = EnvironmentStatus.READY
                             statusText = "状态：${result.output}"
+                            buttonText = "开始游戏"
                         }
                         is CommandResult.PythonNotFound -> {
-                            statusText = "状态：未找到 Python 环境"
+                            envStatus = EnvironmentStatus.MISSING_PYTHON
+                            statusText = "环境缺失：未检测到运行环境，请确认 Termux 已安装"
+                            buttonText = "开始游戏（需安装环境）"
                             Toast.makeText(
                                 context,
-                                "未找到 Python 环境：${result.reason}",
+                                "未检测到运行环境，请确认 Termux 已安装（${result.reason}）",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        is CommandResult.GameNotFound -> {
+                            envStatus = EnvironmentStatus.MISSING_GAME
+                            statusText = "环境缺失：未检测到游戏目录"
+                            buttonText = "开始游戏（缺少游戏目录）"
+                            Toast.makeText(
+                                context,
+                                "未检测到游戏目录：${result.reason}",
                                 Toast.LENGTH_LONG
                             ).show()
                         }
@@ -81,7 +125,7 @@ fun LauncherScreen() {
                 }
             }.start()
         }) {
-            Text(text = "开始游戏")
+            Text(text = buttonText)
         }
     }
 }

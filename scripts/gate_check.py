@@ -218,13 +218,26 @@ def check_g8(report_path: str) -> tuple[bool, str]:
     return True, "all ACs verified idempotent (--twice)"
 
 
+PROBE_LAYER_EXEMPT = {
+    "client/android/app/src/main/java/com/aliceincradle/launcher/ProcessBridge.kt",
+    "scripts/run_regression_n1_n10.py",
+}
+
+
 def check_g9(card: dict) -> tuple[bool, str]:
     for ac in card.get("acceptance", []):
         cmd = str(ac.get("cmd", ""))
         for pat in LOCAL_ABS_PATTERNS:
             if pat.search(cmd):
                 return False, f"G9/X3 hardcoded local path in {ac.get('id')}: {cmd}"
-    return True, "no hardcoded local paths in acceptance cmds"
+    for p in _git_changed_files():
+        if p in PROBE_LAYER_EXEMPT or not (p.endswith(".kt") or p.endswith(".py")) or not os.path.isfile(p):
+            continue
+        txt = open(p, "r", encoding="utf-8", errors="ignore").read()
+        for pat in LOCAL_ABS_PATTERNS:
+            if pat.search(txt):
+                return False, f"G9/X3 hardcoded local path in {p}"
+    return True, "no hardcoded local paths in acceptance cmds or non-probe code"
 
 
 def check_g10() -> tuple[bool, str]:
@@ -265,7 +278,12 @@ def check_g11() -> tuple[bool, str]:
             hit = _has_empty_except(lines)
             if hit:
                 return False, f"G11/X1 silent failure pattern in {p}: {hit}"
-    return True, "no silent failure patterns in diff or untracked .py"
+    for p in _git_changed_files():
+        if p.endswith(".kt") and os.path.isfile(p):
+            txt = open(p, "r", encoding="utf-8", errors="ignore").read()
+            if "ProcessBuilder(" in txt and not re.search(r"try\s*\{[\s\S]*ProcessBuilder\([\s\S]*\}\s*catch\s*\(", txt):
+                return False, f"G11/X1 ProcessBuilder without try-catch in {p}"
+    return True, "no silent failure patterns in diff, untracked .py, or .kt ProcessBuilder"
 
 
 def check_g12() -> tuple[bool, str]:
