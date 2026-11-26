@@ -18,7 +18,6 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -67,124 +66,101 @@ fun MainScreen(viewModel: MainViewModel) {
             }
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            TelemetryDashboardCard(
-                telemetry = uiState.telemetry,
-                onGaugeClick = { dialogType -> viewModel.openTelemetryDialog(dialogType) }
+        if (uiState.selectedTab == MainTab.DOWNLOAD) {
+            DownloadScreen(
+                state = uiState.downloadPage,
+                onQueryChange = { viewModel.updateDownloadQuery(it) },
+                onAppSelect = { viewModel.selectDownloadApp(it) },
+                onVersionSelect = { viewModel.selectDownloadVersion(it) },
+                onCategorySelect = { viewModel.selectDownloadCategory(it) },
+                onIncludeCompatibleChange = { viewModel.toggleIncludeCompatibleMods(it) },
+                onIncludeFeaturedChange = { viewModel.toggleIncludeFeaturedMods(it) },
+                onDownloadClick = { viewModel.triggerCatalogDownload(it) },
+                onDetailClick = { viewModel.openCatalogItemDetail(it) },
+                onDismissDetail = { viewModel.dismissCatalogItemDetail() },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
             )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TelemetryDashboardCard(
+                    telemetry = uiState.telemetry,
+                    onGaugeClick = { dialogType -> viewModel.openTelemetryDialog(dialogType) }
+                )
 
-            GameStatusCard(
-                processState = uiState.gameProcess,
-                onNormalExit = { viewModel.exitGameNormally() }
-            )
+                GameStatusCard(
+                    processState = uiState.gameProcess,
+                    onNormalExit = { viewModel.exitGameNormally() }
+                )
 
-            when (uiState.selectedTab) {
-                MainTab.HOME -> {
-                    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "硬件与运行环境（动态探测）",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            InfoRow(label = "CPU", value = info.cpu)
-                            InfoRow(label = "GPU", value = info.gpu)
-                            InfoRow(label = "内存", value = info.memory)
-                            InfoRow(label = "Android", value = info.androidVersion)
-                            InfoRow(label = "Python", value = info.pythonVersion)
-                            InfoRow(label = "AIC 版本", value = info.aicVersion)
-                        }
-                    }
-
-                    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "下载队列调试",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = if (uiState.downloadTasks.isEmpty()) "当前无下载任务（按钮隐藏）" else "进行中：${uiState.downloadTasks.size} 项",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            OutlinedButton(onClick = { viewModel.toggleSampleDownloads() }) {
-                                Text(text = if (uiState.downloadTasks.isEmpty()) "模拟下载" else "清空下载")
-                            }
-                        }
-                    }
-                }
-
-                MainTab.DOWNLOAD -> {
-                    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                when (uiState.selectedTab) {
+                    MainTab.HOME -> {
+                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Text(
-                                    text = "下载中心",
+                                    text = "硬件与运行环境（动态探测）",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold
                                 )
-                                OutlinedButton(onClick = { viewModel.toggleSampleDownloads() }) {
-                                    Text(text = if (uiState.downloadTasks.isEmpty()) "添加模拟任务" else "清空队列")
-                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                InfoRow(label = "CPU", value = info.cpu)
+                                InfoRow(label = "GPU", value = info.gpu)
+                                InfoRow(label = "内存", value = info.memory)
+                                InfoRow(label = "Android", value = info.androidVersion)
+                                InfoRow(label = "Python", value = info.pythonVersion)
+                                InfoRow(label = "AIC 版本", value = info.aicVersion)
                             }
-                            if (uiState.downloadTasks.isEmpty()) {
-                                Text(
-                                    text = "暂无下载任务",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else {
-                                uiState.downloadTasks.forEach { task ->
-                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        InfoRow(label = task.name, value = "${task.progressPercent}%")
-                                        LinearProgressIndicator(
-                                            progress = { (task.progressPercent / 100f).coerceIn(0f, 1f) },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
+                        }
+
+                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "下载队列调试",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = if (uiState.downloadTasks.isEmpty()) "当前无下载任务（按钮隐藏）" else "进行中：${uiState.downloadTasks.size} 项",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                OutlinedButton(onClick = { viewModel.toggleSampleDownloads() }) {
+                                    Text(text = if (uiState.downloadTasks.isEmpty()) "模拟下载" else "清空下载")
                                 }
                             }
                         }
                     }
-                }
 
-                MainTab.FILES -> {
-                    PlaceholderTabCard(text = "文件夹管理（占位）")
-                }
+                    MainTab.DOWNLOAD -> Unit
 
-                MainTab.SETTINGS -> {
-                    PlaceholderTabCard(text = "设置（占位）")
+                    MainTab.FILES -> {
+                        PlaceholderTabCard(text = "文件夹管理（占位）")
+                    }
+
+                    MainTab.SETTINGS -> {
+                        PlaceholderTabCard(text = "设置（占位）")
+                    }
                 }
             }
         }

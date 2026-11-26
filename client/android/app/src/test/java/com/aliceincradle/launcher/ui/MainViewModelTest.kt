@@ -1,10 +1,12 @@
 package com.aliceincradle.launcher.ui
 
+import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadTaskItem
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -72,5 +74,32 @@ class MainViewModelTest {
             vm.dismissTelemetryDialog()
             assertEquals(TelemetryDialogType.NONE, vm.uiState.value.activeDialog)
         }
+    }
+
+    @Test
+    fun downloadPageContainsAllRequiredStatusesAndFiltersCorrectly() {
+        val vm = MainViewModel()
+        val initialPage = vm.uiState.value.downloadPage
+
+        assertEquals("共 23333 个内容，耗时 0.01s", initialPage.statsText)
+        assertTrue(initialPage.items.size >= 3)
+        val statuses = initialPage.items.map { it.status }.toSet()
+        assertTrue(statuses.contains(DownloadContentStatus.DOWNLOADED))
+        assertTrue(statuses.contains(DownloadContentStatus.DOWNLOADING))
+        assertTrue(statuses.contains(DownloadContentStatus.DISABLED))
+
+        vm.updateDownloadQuery("Legacy")
+        assertEquals(1, vm.uiState.value.downloadPage.items.size)
+        assertEquals("mod-legacy-relic", vm.uiState.value.downloadPage.items.first().id)
+
+        vm.updateDownloadQuery("")
+        vm.selectDownloadCategory("游戏本体")
+        assertTrue(vm.uiState.value.downloadPage.items.all { it.category == "游戏本体" })
+
+        val firstItem = vm.uiState.value.downloadPage.items.first()
+        vm.openCatalogItemDetail(firstItem)
+        assertEquals(firstItem.id, vm.uiState.value.downloadPage.selectedDetailItem?.id)
+        vm.dismissCatalogItemDetail()
+        assertNull(vm.uiState.value.downloadPage.selectedDetailItem)
     }
 }

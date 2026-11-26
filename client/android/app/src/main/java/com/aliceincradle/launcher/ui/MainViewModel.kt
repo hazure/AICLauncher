@@ -5,6 +5,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aliceincradle.launcher.data.DeviceInfo
 import com.aliceincradle.launcher.data.DeviceInfoProvider
+import com.aliceincradle.launcher.data.DownloadCatalogItem
+import com.aliceincradle.launcher.data.DownloadCatalogPreviewFactory
+import com.aliceincradle.launcher.data.DownloadContentStatus
+import com.aliceincradle.launcher.data.DownloadFilterState
+import com.aliceincradle.launcher.data.DownloadPageState
 import com.aliceincradle.launcher.data.DownloadTaskItem
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
@@ -50,7 +55,8 @@ data class MainUiState(
     val activeDialog: TelemetryDialogType = TelemetryDialogType.NONE,
     val isDownloadSheetOpen: Boolean = false,
     val canLaunchGame: Boolean = true,
-    val selectedTab: MainTab = MainTab.HOME
+    val selectedTab: MainTab = MainTab.HOME,
+    val downloadPage: DownloadPageState = DownloadPageState()
 ) {
     val fabVisibility: FabGroupVisibility
         get() = FabGroupVisibility(
@@ -185,6 +191,82 @@ class MainViewModel : ViewModel() {
             )
         } else {
             updateDownloads(emptyList())
+        }
+    }
+
+    fun updateDownloadQuery(query: String) {
+        updateDownloadFilter { it.copy(query = query) }
+    }
+
+    fun selectDownloadApp(app: String) {
+        updateDownloadFilter { it.copy(selectedApp = app) }
+    }
+
+    fun selectDownloadVersion(version: String) {
+        updateDownloadFilter { it.copy(selectedVersion = version, isVersionFilterApplied = true) }
+    }
+
+    fun selectDownloadCategory(category: String) {
+        updateDownloadFilter { it.copy(selectedCategory = category, isCategoryFilterApplied = true) }
+    }
+
+    fun toggleIncludeCompatibleMods(checked: Boolean) {
+        updateDownloadFilter { it.copy(includeCompatibleMods = checked) }
+    }
+
+    fun toggleIncludeFeaturedMods(checked: Boolean) {
+        updateDownloadFilter { it.copy(includeFeaturedMods = checked) }
+    }
+
+    fun triggerCatalogDownload(itemId: String) {
+        _uiState.update { state ->
+            val target = state.downloadPage.allItems.find { it.id == itemId } ?: return@update state
+            if (target.status == DownloadContentStatus.DISABLED) return@update state
+
+            val updatedAll = state.downloadPage.allItems.map { item ->
+                if (item.id == itemId && item.status == DownloadContentStatus.DOWNLOADING) {
+                    item.copy(status = DownloadContentStatus.DOWNLOADED)
+                } else {
+                    item
+                }
+            }
+            val nextTasks = if (state.downloadTasks.any { it.id == itemId } || target.status == DownloadContentStatus.DOWNLOADED) {
+                state.downloadTasks
+            } else {
+                state.downloadTasks + DownloadTaskItem(id = target.id, name = target.title, progressPercent = 15)
+            }
+            state.copy(
+                downloadTasks = nextTasks,
+                downloadPage = state.downloadPage.copy(
+                    allItems = updatedAll,
+                    items = DownloadCatalogPreviewFactory.filterItems(updatedAll, state.downloadPage.filter)
+                )
+            )
+        }
+    }
+
+    fun openCatalogItemDetail(item: DownloadCatalogItem) {
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(selectedDetailItem = item))
+        }
+    }
+
+    fun dismissCatalogItemDetail() {
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(selectedDetailItem = null))
+        }
+    }
+
+    private fun updateDownloadFilter(transform: (DownloadFilterState) -> DownloadFilterState) {
+        _uiState.update { state ->
+            val nextFilter = transform(state.downloadPage.filter)
+            val filtered = DownloadCatalogPreviewFactory.filterItems(state.downloadPage.allItems, nextFilter)
+            state.copy(
+                downloadPage = state.downloadPage.copy(
+                    filter = nextFilter,
+                    items = filtered
+                )
+            )
         }
     }
 }
