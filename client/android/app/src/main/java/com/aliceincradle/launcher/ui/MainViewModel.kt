@@ -2,7 +2,7 @@ package com.aliceincradle.launcher.ui
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import com.aliceincradle.launcher.bridge.EnvDetector
 import com.aliceincradle.launcher.data.DeviceInfo
 import com.aliceincradle.launcher.data.DeviceInfoProvider
 import com.aliceincradle.launcher.data.DownloadCatalogItem
@@ -17,12 +17,19 @@ import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
 import com.aliceincradle.launcher.data.SettingsPageState
 import com.aliceincradle.launcher.data.SystemTelemetry
+import com.aliceincradle.launcher.data.SystemTelemetryProvider
 import com.aliceincradle.launcher.data.TelemetryPreviewFactory
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 enum class MainTab(val label: String) {
@@ -71,29 +78,80 @@ data class MainUiState(
         )
 }
 
-class MainViewModel : ViewModel() {
+class MainViewModel @JvmOverloads constructor(
+    private val telemetryProvider: SystemTelemetryProvider = SystemTelemetryProvider(),
+    private val envDetector: EnvDetector = EnvDetector(),
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    autoStartPolling: Boolean = true,
+    private val refreshIntervalMs: Long = 2_000L
+) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
-    private var hasLoaded = false
+    @Volatile
+    private var appContext: Context? = null
+    private var hasLoadedContext = false
     private var nextSimulatedPid = 10482
+    private val probeScope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
-    fun loadDeviceInfo(appContext: Context) {
-        if (hasLoaded) return
-        hasLoaded = true
-        viewModelScope.launch(Dispatchers.IO) {
-            val info = DeviceInfoProvider.load(appContext)
-            _uiState.update { state ->
-                state.copy(
-                    isLoading = false,
-                    deviceInfo = info,
-                    telemetry = TelemetryPreviewFactory.createPreview(
-                        gpuRenderer = info.gpu,
-                        isGameRunning = state.gameProcess.isAlive
-                    )
-                )
+    init {
+        if (autoStartPolling) {
+            probeScope.launch {
+                refreshTelemetryAndEnv(includeEnv = true)
+                while (isActive) {
+                    delay(refreshIntervalMs)
+                    refreshTelemetryAndEnv(includeEnv = false)
+                }
             }
         }
+    }
+
+    fun loadDeviceInfo(appContext: Context) {
+        this.appContext = appContext.applicationContext
+        if (hasLoadedContext) return
+        hasLoadedContext = true
+        probeScope.launch {
+            refreshTelemetryAndEnv(includeEnv = true)
+        }
+    }
+
+    suspend fun refreshTelemetryAndEnv(includeEnv: Boolean = true) {
+        val ctx = appContext
+        val sampledTelemetry = telemetryProvider.sample(ctx)
+        val detectedProcess = envDetector.probeGameProcess()
+        val updatedDeviceInfo = if (includeEnv) {
+            DeviceInfoProvider.load(
+                context = ctx,
+                telemetryProvider = telemetryProvider,
+                envDetector = envDetector,
+                cachedTelemetry = sampledTelemetry
+            )
+        } else {
+            null
+        }
+
+        _uiState.update { state ->
+            val nextInfo = updatedDeviceInfo ?: state.deviceInfo.copy(
+                gpu = sampledTelemetry.gpu.renderer,
+                memory = DeviceInfoProvider.formatMemorySummary(sampledTelemetry.memory)
+            )
+            val nextProcess = when {
+                detectedProcess.isAlive -> detectedProcess
+                state.gameProcess.isSimulated -> state.gameProcess
+                else -> detectedProcess
+            }
+            state.copy(
+                isLoading = false,
+                deviceInfo = nextInfo,
+                telemetry = sampledTelemetry,
+                gameProcess = nextProcess
+            )
+        }
+    }
+
+    override fun onCleared() {
+        probeScope.cancel()
+        super.onCleared()
     }
 
     fun selectTab(tab: MainTab) {
@@ -128,13 +186,7 @@ class MainViewModel : ViewModel() {
      */
     fun updateGameProcess(processState: GameProcessState) {
         _uiState.update { state ->
-            state.copy(
-                gameProcess = processState,
-                telemetry = TelemetryPreviewFactory.createPreview(
-                    gpuRenderer = state.deviceInfo.gpu,
-                    isGameRunning = processState.isAlive
-                )
-            )
+            state.copy(gameProcess = processState)
         }
     }
 
@@ -156,7 +208,8 @@ class MainViewModel : ViewModel() {
             GameProcessState(
                 status = GameRunStatus.RUNNING,
                 versionName = "AIC 0.3.0",
-                pid = pid
+                pid = pid,
+                isSimulated = true
             )
         )
     }
@@ -166,7 +219,8 @@ class MainViewModel : ViewModel() {
             GameProcessState(
                 status = GameRunStatus.TERMINATED,
                 versionName = "AIC 0.3.0",
-                pid = null
+                pid = null,
+                isSimulated = false
             )
         )
     }
@@ -176,7 +230,8 @@ class MainViewModel : ViewModel() {
             GameProcessState(
                 status = GameRunStatus.STOPPED,
                 versionName = "AIC 0.3.0",
-                pid = null
+                pid = null,
+                isSimulated = false
             )
         )
     }
@@ -309,14 +364,11 @@ class MainViewModel : ViewModel() {
                     val runningState = GameProcessState(
                         status = GameRunStatus.RUNNING,
                         versionName = "AIC 0.3.0",
-                        pid = pid
+                        pid = pid,
+                        isSimulated = true
                     )
                     state.copy(
                         gameProcess = runningState,
-                        telemetry = TelemetryPreviewFactory.createPreview(
-                            gpuRenderer = state.deviceInfo.gpu,
-                            isGameRunning = true
-                        ),
                         folderPage = folder.copy(
                             actionNotice = "已模拟启动：${target?.name ?: "AliceInCradle.exe"} (PID: $pid)"
                         )

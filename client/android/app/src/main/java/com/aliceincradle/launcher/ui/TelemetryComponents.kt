@@ -102,6 +102,7 @@ fun TelemetryDashboardCard(
                     CircularMetricGauge(
                         label = "运存",
                         percent = telemetry.memory.usagePercent,
+                        valueTextOverride = if (telemetry.memory.isAvailable) null else "--",
                         accentColor = MaterialTheme.colorScheme.primary,
                         onClick = { onGaugeClick(TelemetryDialogType.MEMORY) },
                         modifier = Modifier.weight(1f)
@@ -109,6 +110,7 @@ fun TelemetryDashboardCard(
                     CircularMetricGauge(
                         label = "CPU",
                         percent = telemetry.cpu.usagePercent,
+                        valueTextOverride = if (telemetry.cpu.isAvailable) null else "--",
                         accentColor = MaterialTheme.colorScheme.tertiary,
                         onClick = { onGaugeClick(TelemetryDialogType.CPU) },
                         modifier = Modifier.weight(1f)
@@ -116,6 +118,7 @@ fun TelemetryDashboardCard(
                     CircularMetricGauge(
                         label = "GPU",
                         percent = telemetry.gpu.usagePercent,
+                        valueTextOverride = if (telemetry.gpu.isUsageAvailable) null else "--",
                         accentColor = MaterialTheme.colorScheme.secondary,
                         onClick = { onGaugeClick(TelemetryDialogType.GPU) },
                         modifier = Modifier.weight(1f)
@@ -139,10 +142,12 @@ private fun CircularMetricGauge(
     percent: Float,
     accentColor: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    valueTextOverride: String? = null
 ) {
     val clamped = percent.coerceIn(0f, 1f)
     val percentInt = (clamped * 100).toInt()
+    val displayText = valueTextOverride ?: "$percentInt%"
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
 
     Column(
@@ -150,7 +155,7 @@ private fun CircularMetricGauge(
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 4.dp, vertical = 6.dp)
-            .semantics { contentDescription = "$label 占用率 $percentInt%" },
+            .semantics { contentDescription = "$label 占用率 $displayText" },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
@@ -180,18 +185,20 @@ private fun CircularMetricGauge(
                     size = arcSize,
                     style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
                 )
-                drawArc(
-                    color = accentColor,
-                    startAngle = -90f,
-                    sweepAngle = 360f * clamped,
-                    useCenter = false,
-                    topLeft = topLeft,
-                    size = arcSize,
-                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-                )
+                if (valueTextOverride == null) {
+                    drawArc(
+                        color = accentColor,
+                        startAngle = -90f,
+                        sweepAngle = 360f * clamped,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                    )
+                }
             }
             Text(
-                text = "$percentInt%",
+                text = displayText,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1
@@ -211,19 +218,27 @@ private fun ThermometerGauge(
     thermal: ThermalStats,
     onClick: () -> Unit
 ) {
-    val tempFraction = ((thermal.headlineTempC - 20f) / 70f).coerceIn(0.08f, 1f)
+    val headlineTemp = thermal.headlineTempC
+    val tempFraction = if (headlineTemp != null) {
+        ((headlineTemp - 20f) / 70f).coerceIn(0.08f, 1f)
+    } else {
+        0.08f
+    }
     val gaugeColor = when {
-        thermal.headlineTempC >= 75 -> MaterialTheme.colorScheme.error
-        thermal.headlineTempC >= 55 -> Color(0xFFEF6C00)
+        headlineTemp == null -> MaterialTheme.colorScheme.outline
+        headlineTemp >= 75 -> MaterialTheme.colorScheme.error
+        headlineTemp >= 55 -> Color(0xFFEF6C00)
         else -> MaterialTheme.colorScheme.primary
     }
+    val tempLabel = if (headlineTemp != null) "${headlineTemp}°C" else "--"
+    val semanticDesc = if (headlineTemp != null) "温度 $headlineTemp 摄氏度" else "温度 --"
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
 
     Surface(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .semantics { contentDescription = "温度 ${thermal.headlineTempC} 摄氏度" },
+            .semantics { contentDescription = semanticDesc },
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
     ) {
@@ -262,7 +277,7 @@ private fun ThermometerGauge(
                         modifier = Modifier.size(20.dp)
                     )
                     Text(
-                        text = "${thermal.headlineTempC}°C",
+                        text = tempLabel,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -396,9 +411,18 @@ fun TelemetryDetailDialog(
     if (dialogType == TelemetryDialogType.NONE) return
 
     val title = when (dialogType) {
-        TelemetryDialogType.MEMORY -> "运存占用率明细 (${(telemetry.memory.usagePercent * 100).toInt()}%)"
-        TelemetryDialogType.CPU -> "CPU 核心实时状态 (${(telemetry.cpu.usagePercent * 100).toInt()}%)"
-        TelemetryDialogType.GPU -> "GPU 实时状态 (${(telemetry.gpu.usagePercent * 100).toInt()}%)"
+        TelemetryDialogType.MEMORY -> {
+            val suffix = if (telemetry.memory.isAvailable) "${(telemetry.memory.usagePercent * 100).toInt()}%" else "--"
+            "运存占用率明细 ($suffix)"
+        }
+        TelemetryDialogType.CPU -> {
+            val suffix = if (telemetry.cpu.isAvailable) "${(telemetry.cpu.usagePercent * 100).toInt()}%" else "--"
+            "CPU 核心实时状态 ($suffix)"
+        }
+        TelemetryDialogType.GPU -> {
+            val suffix = if (telemetry.gpu.isUsageAvailable) "${(telemetry.gpu.usagePercent * 100).toInt()}%" else "--"
+            "GPU 实时状态 ($suffix)"
+        }
         TelemetryDialogType.THERMAL -> "传感器温度明细"
         TelemetryDialogType.NONE -> ""
     }
@@ -417,14 +441,40 @@ fun TelemetryDetailDialog(
                 when (dialogType) {
                     TelemetryDialogType.MEMORY -> {
                         val mem = telemetry.memory
-                        DialogKeyValueRow("启动器占用", "${mem.launcherMb} MB")
-                        DialogKeyValueRow("游戏占用", "${mem.gameMb} MB")
-                        DialogKeyValueRow("PML 占用", "${mem.pmlMb} MB")
-                        HorizontalDivider()
-                        DialogKeyValueRow("容器总占用", "${mem.containerTotalMb} MB", emphasize = true)
+                        if (mem.totalDeviceMb > 0L) {
+                            DialogKeyValueRow("系统总内存", "${mem.totalDeviceMb} MB")
+                            DialogKeyValueRow("已用内存", "${mem.usedDeviceMb} MB", emphasize = true)
+                            DialogKeyValueRow("可用内存", "${mem.availDeviceMb} MB")
+                            HorizontalDivider()
+                            DialogKeyValueRow(
+                                "启动器进程占用",
+                                if (mem.launcherMb > 0) "${mem.launcherMb} MB" else "--"
+                            )
+                        } else if (!mem.isAvailable) {
+                            Text(
+                                text = "未检测到系统内存信息",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            DialogKeyValueRow("启动器占用", "${mem.launcherMb} MB")
+                            DialogKeyValueRow("游戏占用", "${mem.gameMb} MB")
+                            DialogKeyValueRow("PML 占用", "${mem.pmlMb} MB")
+                            HorizontalDivider()
+                            DialogKeyValueRow("容器总占用", "${mem.containerTotalMb} MB", emphasize = true)
+                        }
                     }
                     TelemetryDialogType.CPU -> {
+                        if (telemetry.cpu.isEstimatedFromFreq) {
+                            Text(
+                                text = "当前系统限制 /proc/stat 读取，核心占用率按实时频率估算",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         telemetry.cpu.cores.forEach { core ->
+                            val freqText = if (core.freqMhz > 0) "${core.freqMhz} MHz" else "--"
+                            val usageText = if (telemetry.cpu.isAvailable) "${core.usagePercent}%" else "--"
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -436,7 +486,7 @@ fun TelemetryDetailDialog(
                                         fontWeight = FontWeight.Medium
                                     )
                                     Text(
-                                        text = "${core.freqMhz} MHz · ${core.usagePercent}%",
+                                        text = "$freqText · $usageText",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -451,16 +501,34 @@ fun TelemetryDetailDialog(
                     TelemetryDialogType.GPU -> {
                         val gpu = telemetry.gpu
                         DialogKeyValueRow("渲染器", gpu.renderer)
-                        DialogKeyValueRow("GPU 实时频率", "${gpu.freqMhz} MHz", emphasize = true)
-                        DialogKeyValueRow("峰值参考频率", "${gpu.maxFreqMhz} MHz")
-                        DialogKeyValueRow("GPU 占用率", "${(gpu.usagePercent * 100).toInt()}%")
+                        DialogKeyValueRow(
+                            "GPU 实时频率",
+                            if (gpu.isFreqAvailable && gpu.freqMhz > 0) "${gpu.freqMhz} MHz" else "--",
+                            emphasize = true
+                        )
+                        DialogKeyValueRow(
+                            "峰值参考频率",
+                            if (gpu.maxFreqMhz > 0) "${gpu.maxFreqMhz} MHz" else "--"
+                        )
+                        DialogKeyValueRow(
+                            "GPU 占用率",
+                            if (gpu.isUsageAvailable) "${(gpu.usagePercent * 100).toInt()}%" else "--"
+                        )
                     }
                     TelemetryDialogType.THERMAL -> {
-                        telemetry.thermal.sensors.forEach { sensor ->
-                            DialogKeyValueRow(
-                                label = sensor.name,
-                                value = String.format(Locale.US, "%.1f °C", sensor.tempC)
+                        if (telemetry.thermal.sensors.isEmpty()) {
+                            Text(
+                                text = "未检测到可用温度传感器（--）",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        } else {
+                            telemetry.thermal.sensors.forEach { sensor ->
+                                DialogKeyValueRow(
+                                    label = sensor.name,
+                                    value = sensor.tempC?.let { String.format(Locale.US, "%.1f °C", it) } ?: "--"
+                                )
+                            }
                         }
                     }
                     TelemetryDialogType.NONE -> Unit

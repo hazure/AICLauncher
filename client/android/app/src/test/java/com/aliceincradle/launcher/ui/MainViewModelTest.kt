@@ -1,18 +1,28 @@
 package com.aliceincradle.launcher.ui
 
+import com.aliceincradle.launcher.bridge.EnvDetector
 import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadTaskItem
 import com.aliceincradle.launcher.data.FolderAction
 import com.aliceincradle.launcher.data.FolderEntryType
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
+import com.aliceincradle.launcher.data.SystemTelemetryProvider
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class MainViewModelTest {
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
     @Test
     fun initialStateShowsLaunchButtonAndHidesStatusCardAndDownloadButton() {
         val vm = MainViewModel()
@@ -173,5 +183,53 @@ class MainViewModelTest {
         vm.confirmCustomPath()
         assertFalse(vm.uiState.value.settingsPage.isCustomPathDialogOpen)
         assertEquals("E:/tools/python311", vm.uiState.value.settingsPage.selectedPythonDir)
+    }
+
+    @Test
+    fun refreshTelemetryAndEnvDrivesRealStateAndRespectsSimulatedProcess() = runBlocking {
+        val proc = tempFolder.newFolder("proc_vm")
+        val sys = tempFolder.newFolder("sys_vm")
+        File(proc, "meminfo").writeText(
+            """
+            MemTotal:       4096000 kB
+            MemAvailable:   1024000 kB
+            """.trimIndent()
+        )
+        val zone0 = File(sys, "class/thermal/thermal_zone0").apply { mkdirs() }
+        File(zone0, "type").writeText("gpu-thermal")
+        File(zone0, "temp").writeText("51200")
+
+        val vm = MainViewModel(
+            telemetryProvider = SystemTelemetryProvider(procRoot = proc, sysRoot = sys),
+            envDetector = EnvDetector(
+                procRoot = proc,
+                allowBareCommandFallback = false,
+                envProvider = { emptyMap() }
+            ),
+            ioDispatcher = Dispatchers.Unconfined,
+            autoStartPolling = false
+        )
+
+        vm.refreshTelemetryAndEnv(includeEnv = true)
+        val refreshed = vm.uiState.value
+        assertFalse(refreshed.isLoading)
+        assertTrue(refreshed.telemetry.memory.isAvailable)
+        assertEquals(0.75f, refreshed.telemetry.memory.usagePercent, 0.01f)
+        assertEquals(51, refreshed.telemetry.thermal.headlineTempC)
+        assertEquals(EnvDetector.MISSING_PYTHON_LABEL, refreshed.deviceInfo.pythonVersion)
+        assertFalse(refreshed.gameProcess.isAlive)
+
+        // Simulated launch must not be overridden when external procfs shows no game process.
+        vm.launchGame()
+        assertTrue(vm.uiState.value.gameProcess.isAlive)
+        vm.refreshTelemetryAndEnv(includeEnv = false)
+        assertTrue(vm.uiState.value.gameProcess.isAlive)
+
+        // Real detected game process takes precedence.
+        val pidDir = File(proc, "9876").apply { mkdirs() }
+        File(pidDir, "cmdline").writeText("AliceInCradle.exe")
+        vm.refreshTelemetryAndEnv(includeEnv = false)
+        assertTrue(vm.uiState.value.gameProcess.isAlive)
+        assertEquals(9876, vm.uiState.value.gameProcess.pid)
     }
 }
