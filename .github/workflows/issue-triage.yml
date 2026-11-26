@@ -2,14 +2,13 @@ name: Issue Triage
 
 on:
   issues:
-    types: [opened]
+    types: [opened, edited]
 
-# 权限最小化：仅声明 issue 写入与 GitHub Models 只读权限，严禁 contents: write 等无关权限
+# 权限最小化：仅声明 issues: write 权限
 permissions:
   issues: write
-  models: read
 
-# 同一 Issue 同时只运行一个 triage 任务，防止重复触发与限流放大
+# 同一 Issue 按顺序串行处理，避免 opened 与 edited 并发竞争
 concurrency:
   group: issue-triage-${{ github.event.issue.number }}
   cancel-in-progress: false
@@ -20,160 +19,119 @@ jobs:
     # 仅处理普通 Issue，避免机器人自触发循环
     if: github.event.issue.pull_request == null && !endsWith(github.event.issue.user.login, '[bot]')
     steps:
-      - name: Prepare triage prompt
-        id: prepare
+      - name: Triage issue with deterministic rule engine
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
-
-            const issue = context.payload.issue;
-            const title = (issue.title || '').trim();
-            const rawBody = (issue.body || '').trim();
-            const maxBodyLen = 4000;
-            const body = rawBody.length > maxBodyLen
-              ? rawBody.slice(0, maxBodyLen) + '\n...(truncated)'
-              : (rawBody || '(无正文)');
-
-            const promptText = [
-              '请分析以下 GitHub Issue，并严格按要求输出 JSON：',
-              '',
-              `标题：${title}`,
-              '正文：',
-              body,
-            ].join('\n');
-
-            const tempDir = process.env.RUNNER_TEMP || '/tmp';
-            const promptPath = path.join(tempDir, 'issue-triage-prompt.txt');
-            fs.writeFileSync(promptPath, promptText, 'utf8');
-            core.setOutput('prompt_file', promptPath);
-
-      # 调用 GitHub Models（低速率档 gpt-4.1-mini）；失败时不重试超过 1 次且不向 Issue 发送错误评论
-      - name: Classify issue with GitHub Models
-        id: ai
-        uses: actions/ai-inference@v1
-        with:
-          model: openai/gpt-4.1-mini
-          max-tokens: '400'
-          prompt-file: ${{ steps.prepare.outputs.prompt_file }}
-          system-prompt: |
-            你是 AliceInCradle Android 兼容补丁仓库（AICL）的 Issue 自动分类助手。
-            请阅读用户的 Issue 标题与正文，严格输出合法的纯 JSON 对象（不要包含 Markdown 代码块或任何多余文字），格式如下：
-            {
-              "labels": ["bug"],
-              "confidence": "high",
-              "missing_info": ["复现步骤", "AIC 版本", "设备/系统信息"],
-              "summary": "一句话中文简要说明"
-            }
-
-            字段规范：
-            1. labels：从 ["bug", "enhancement", "question", "duplicate", "invalid"] 中选择 1 个或多个最贴切的标签。
-               - 崩溃、闪退、黑屏、报错、无法启动、渲染异常等属于 "bug"。
-               - 功能建议、新特性请求属于 "enhancement"。
-               - 使用咨询、配置疑问属于 "question"。
-               - 明显重复问题属于 "duplicate"。
-               - 无意义灌水或完全无关内容属于 "invalid"。
-            2. confidence：只能是 "high"、"medium" 或 "low" 之一。仅当内容过于模糊完全无法判断类别时才填 "low"。
-            3. missing_info：仅当 labels 包含 "bug" 时检查正文和标题是否提供了以下 3 项关键信息，将缺失项的准确名称放入数组（若全部具备则为空数组 []）；非 bug 类 issue 固定返回 []：
-               - "复现步骤"（触发问题的具体操作流程或场景）
-               - "AIC 版本"（游戏版本或补丁/AICL 版本号）
-               - "设备/系统信息"（手机型号、Android 版本、Winlator/Wine/Turnip/Box64 等环境信息）
-            4. summary：简短中文说明判断依据（不超过 60 字）。
-
-      - name: Apply labels and triage comment
-        uses: actions/github-script@v7
-        env:
-          AI_RESPONSE: ${{ steps.ai.outputs.response }}
-          AI_RESPONSE_FILE: ${{ steps.ai.outputs.response-file }}
-        with:
-          script: |
-            const fs = require('fs');
-
-            let raw = (process.env.AI_RESPONSE || '').trim();
-            if (!raw && process.env.AI_RESPONSE_FILE && fs.existsSync(process.env.AI_RESPONSE_FILE)) {
-              raw = fs.readFileSync(process.env.AI_RESPONSE_FILE, 'utf8').trim();
-            }
-            if (!raw) {
-              core.setFailed('AI inference returned empty response; skipping issue updates.');
-              return;
-            }
-
-            const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-            const jsonText = fenceMatch ? fenceMatch[1].trim() : raw;
-
-            let result;
-            try {
-              result = JSON.parse(jsonText);
-            } catch (err) {
-              core.setFailed(`Failed to parse AI JSON response: ${err.message}`);
-              return;
-            }
-
-            const allowedLabels = new Set(['bug', 'enhancement', 'question', 'duplicate', 'invalid']);
-            const labels = Array.isArray(result.labels)
-              ? [...new Set(result.labels.filter((l) => typeof l === 'string' && allowedLabels.has(l)))]
-              : [];
-            const confidence = ['high', 'medium', 'low'].includes(result.confidence)
-              ? result.confidence
-              : 'low';
-            const allowedMissing = ['复现步骤', 'AIC 版本', '设备/系统信息'];
-            const missingInfo = Array.isArray(result.missing_info)
-              ? [...new Set(result.missing_info.filter((m) => allowedMissing.includes(m)))]
-              : [];
-
-            const disclaimer = '本回复由自动化工具生成，仅用于分类辅助，不代表项目作者立场';
             const { owner, repo } = context.repo;
-            const issue_number = context.payload.issue.number;
+            const issue = context.payload.issue;
+            const issue_number = issue.number;
+            const title = issue.title || '';
+            const body = issue.body || '';
+            const fullText = `${title}\n${body}`;
 
-            core.info(`Parsed triage result: labels=${JSON.stringify(labels)}, confidence=${confidence}, missing_info=${JSON.stringify(missingInfo)}`);
+            const bugRegex = /崩溃|闪退|报错|黑屏|无法启动|bug|error|crash/i;
+            const enhancementRegex = /建议|希望|能不能|求加|enhancement|feature/i;
+            const reproRegex = /复现|步骤|如何重现|reproduce/i;
+            const versionRegex = /AIC|版本|version/i;
 
-            // 置信度为 low 时不自动打标签，改为评论建议人工确认
-            if (confidence === 'low' || labels.length === 0) {
-              const body = [
-                '感谢反馈！当前自动分类置信度较低，暂未自动添加标签，建议等待维护者人工确认分类。',
-                '',
-                disclaimer,
-              ].join('\n');
+            const isBug = bugRegex.test(fullText);
+            const isEnhancement = enhancementRegex.test(fullText);
 
-              await github.rest.issues.createComment({
+            const targetLabels = [];
+            if (isBug) targetLabels.push('bug');
+            if (isEnhancement) targetLabels.push('enhancement');
+            if (!isBug && !isEnhancement) targetLabels.push('question');
+
+            const existingLabels = new Set((issue.labels || []).map((l) => l.name));
+            const missingInfo = [];
+
+            if (isBug) {
+              if (!reproRegex.test(body)) missingInfo.push('复现步骤');
+              if (!versionRegex.test(body)) missingInfo.push('AIC 版本');
+              if (missingInfo.length > 0) {
+                targetLabels.push('needs-info');
+              }
+            }
+
+            // 仅添加尚未存在的目标标签
+            const labelsToAdd = targetLabels.filter((name) => !existingLabels.has(name));
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
                 owner,
                 repo,
                 issue_number,
-                body,
+                labels: labelsToAdd,
               });
-              return;
             }
 
-            const labelsToAdd = [...labels];
-            const isBug = labels.includes('bug');
-            if (isBug && missingInfo.length > 0) {
-              labelsToAdd.push('needs-info');
+            // 编辑后若从默认 question 转为明确 bug/enhancement，移除自动遗留的 question 标签
+            if ((isBug || isEnhancement) && existingLabels.has('question')) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number,
+                  name: 'question',
+                });
+              } catch (err) {
+                if (err.status !== 404) throw err;
+              }
             }
 
-            await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number,
-              labels: labelsToAdd,
-            });
-
+            // 仅对 bug 类进行 needs-info 标签同步与缺失信息提醒
             if (isBug && missingInfo.length > 0) {
+              const disclaimer = '*（本回复由自动化工具生成，仅用于分类辅助，不代表项目作者立场）*';
+              const marker = '<!-- aicl-issue-triage:needs-info -->';
               const missingList = missingInfo.map((item) => `- **${item}**`).join('\n');
-              const body = [
-                '感谢提交问题反馈！为了更快定位并排查该问题，建议补充以下信息：',
+              const commentBody = [
+                marker,
+                '感谢提交问题反馈！为了更快排查定位，建议在 Issue 正文中补充以下信息：',
                 '',
                 missingList,
                 '',
-                '补充后维护者会尽快跟进处理，谢谢配合！',
+                '补充完成后维护者（或再次编辑正文后自动化流程）会及时跟进处理。',
                 '',
                 disclaimer,
               ].join('\n');
 
-              await github.rest.issues.createComment({
+              const comments = await github.paginate(github.rest.issues.listComments, {
                 owner,
                 repo,
                 issue_number,
-                body,
+                per_page: 100,
               });
+              const existingNotice = comments.find((c) => (c.body || '').includes(marker));
+
+              if (existingNotice) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existingNotice.id,
+                  body: commentBody,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number,
+                  body: commentBody,
+                });
+              }
+            } else if (existingLabels.has('needs-info')) {
+              // 信息已补齐或非 bug 类时，自动移除 needs-info 标签
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number,
+                  name: 'needs-info',
+                });
+              } catch (err) {
+                if (err.status !== 404) throw err;
+              }
             }
+
+            core.info(
+              `Triaged #${issue_number}: targetLabels=${JSON.stringify(targetLabels)}, missingInfo=${JSON.stringify(missingInfo)}`
+            );
