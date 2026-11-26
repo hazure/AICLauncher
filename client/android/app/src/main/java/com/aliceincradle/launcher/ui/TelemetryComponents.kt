@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -93,26 +95,29 @@ fun TelemetryDashboardCard(
             ) {
                 Row(
                     modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     CircularMetricGauge(
                         label = "运存",
                         percent = telemetry.memory.usagePercent,
                         accentColor = MaterialTheme.colorScheme.primary,
-                        onClick = { onGaugeClick(TelemetryDialogType.MEMORY) }
+                        onClick = { onGaugeClick(TelemetryDialogType.MEMORY) },
+                        modifier = Modifier.weight(1f)
                     )
                     CircularMetricGauge(
                         label = "CPU",
                         percent = telemetry.cpu.usagePercent,
                         accentColor = MaterialTheme.colorScheme.tertiary,
-                        onClick = { onGaugeClick(TelemetryDialogType.CPU) }
+                        onClick = { onGaugeClick(TelemetryDialogType.CPU) },
+                        modifier = Modifier.weight(1f)
                     )
                     CircularMetricGauge(
                         label = "GPU",
                         percent = telemetry.gpu.usagePercent,
                         accentColor = MaterialTheme.colorScheme.secondary,
-                        onClick = { onGaugeClick(TelemetryDialogType.GPU) }
+                        onClick = { onGaugeClick(TelemetryDialogType.GPU) },
+                        modifier = Modifier.weight(1f)
                     )
                 }
 
@@ -132,29 +137,38 @@ private fun CircularMetricGauge(
     label: String,
     percent: Float,
     accentColor: Color,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val clamped = percent.coerceIn(0f, 1f)
     val percentInt = (clamped * 100).toInt()
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 6.dp)
+            .padding(horizontal = 4.dp, vertical = 6.dp)
             .semantics { contentDescription = "$label 占用率 $percentInt%" },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(
-            modifier = Modifier.size(64.dp),
+            modifier = Modifier
+                .widthIn(max = 64.dp)
+                .fillMaxWidth()
+                .aspectRatio(1f),
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val strokeWidth = 7.dp.toPx()
-                val arcSize = Size(size.width - strokeWidth, size.height - strokeWidth)
-                val topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f)
+                val minSide = minOf(size.width, size.height)
+                val strokeWidth = minOf(7.dp.toPx(), minSide * 0.14f)
+                val diameter = (minSide - strokeWidth).coerceAtLeast(0f)
+                val arcSize = Size(diameter, diameter)
+                val topLeft = Offset(
+                    (size.width - diameter) / 2f,
+                    (size.height - diameter) / 2f
+                )
                 drawArc(
                     color = trackColor,
                     startAngle = -90f,
@@ -177,13 +191,15 @@ private fun CircularMetricGauge(
             Text(
                 text = "$percentInt%",
                 style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
             )
         }
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
         )
     }
 }
