@@ -1,15 +1,15 @@
 package com.aliceincradle.launcher.ui
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.view.View
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import java.io.FileOutputStream
@@ -58,7 +58,9 @@ class TelemetryLayoutScreenshotTest {
             viewModel.toggleSampleDownloads()
         }
 
+        lateinit var hostView: View
         composeTestRule.setContent {
+            hostView = LocalView.current
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainScreen(viewModel = viewModel)
@@ -85,9 +87,24 @@ class TelemetryLayoutScreenshotTest {
         assertEquals("GPU ring width must equal Memory ring width", memBounds.width, gpuBounds.width, 1f)
         assertEquals("GPU ring height must equal CPU ring height", cpuBounds.height, gpuBounds.height, 1f)
 
-        val bitmap: Bitmap = composeTestRule.onRoot().captureToImage().asAndroidBitmap()
-        assertTrue("Captured screenshot width must be positive", bitmap.width > 0)
-        assertTrue("Captured screenshot height must be positive", bitmap.height > 0)
+        assertTrue("Host view width must be positive", hostView.width > 0)
+        assertTrue("Host view height must be positive", hostView.height > 0)
+
+        val bitmap = Bitmap.createBitmap(hostView.width, hostView.height, Bitmap.Config.ARGB_8888)
+        hostView.draw(Canvas(bitmap))
+
+        val firstPixel = bitmap.getPixel(0, 0)
+        var hasDistinctPixel = false
+        for (y in 0 until bitmap.height step 16) {
+            for (x in 0 until bitmap.width step 16) {
+                if (bitmap.getPixel(x, y) != firstPixel) {
+                    hasDistinctPixel = true
+                    break
+                }
+            }
+            if (hasDistinctPixel) break
+        }
+        assertTrue("Rendered screenshot must not be a uniform blank image", hasDistinctPixel)
 
         val outDir = File("build/reports/screenshots")
         if (!outDir.exists() && !outDir.mkdirs()) {
