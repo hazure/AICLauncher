@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class MainTab(val label: String) {
     HOME("主页"),
@@ -93,6 +95,7 @@ class MainViewModel @JvmOverloads constructor(
     private var hasLoadedContext = false
     private var nextSimulatedPid = 10482
     private val probeScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private val refreshMutex = Mutex()
 
     init {
         if (autoStartPolling) {
@@ -116,36 +119,38 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     suspend fun refreshTelemetryAndEnv(includeEnv: Boolean = true) {
-        val ctx = appContext
-        val sampledTelemetry = telemetryProvider.sample(ctx)
-        val detectedProcess = envDetector.probeGameProcess()
-        val updatedDeviceInfo = if (includeEnv) {
-            DeviceInfoProvider.load(
-                context = ctx,
-                telemetryProvider = telemetryProvider,
-                envDetector = envDetector,
-                cachedTelemetry = sampledTelemetry
-            )
-        } else {
-            null
-        }
-
-        _uiState.update { state ->
-            val nextInfo = updatedDeviceInfo ?: state.deviceInfo.copy(
-                gpu = sampledTelemetry.gpu.renderer,
-                memory = DeviceInfoProvider.formatMemorySummary(sampledTelemetry.memory)
-            )
-            val nextProcess = when {
-                detectedProcess.isAlive -> detectedProcess
-                state.gameProcess.isSimulated -> state.gameProcess
-                else -> detectedProcess
+        refreshMutex.withLock {
+            val ctx = appContext
+            val sampledTelemetry = telemetryProvider.sample(ctx)
+            val detectedProcess = envDetector.probeGameProcess()
+            val updatedDeviceInfo = if (includeEnv) {
+                DeviceInfoProvider.load(
+                    context = ctx,
+                    telemetryProvider = telemetryProvider,
+                    envDetector = envDetector,
+                    cachedTelemetry = sampledTelemetry
+                )
+            } else {
+                null
             }
-            state.copy(
-                isLoading = false,
-                deviceInfo = nextInfo,
-                telemetry = sampledTelemetry,
-                gameProcess = nextProcess
-            )
+
+            _uiState.update { state ->
+                val nextInfo = updatedDeviceInfo ?: state.deviceInfo.copy(
+                    gpu = sampledTelemetry.gpu.renderer,
+                    memory = DeviceInfoProvider.formatMemorySummary(sampledTelemetry.memory)
+                )
+                val nextProcess = when {
+                    detectedProcess.isAlive -> detectedProcess
+                    state.gameProcess.isSimulated -> state.gameProcess
+                    else -> detectedProcess
+                }
+                state.copy(
+                    isLoading = false,
+                    deviceInfo = nextInfo,
+                    telemetry = sampledTelemetry,
+                    gameProcess = nextProcess
+                )
+            }
         }
     }
 

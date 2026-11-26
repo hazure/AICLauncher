@@ -472,29 +472,37 @@ fun TelemetryDetailDialog(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        telemetry.cpu.cores.forEach { core ->
-                            val freqText = if (core.freqMhz > 0) "${core.freqMhz} MHz" else "--"
-                            val usageText = if (telemetry.cpu.isAvailable) "${core.usagePercent}%" else "--"
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = "Core #${core.coreIndex}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Text(
-                                        text = "$freqText · $usageText",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        if (telemetry.cpu.cores.isEmpty()) {
+                            Text(
+                                text = "未检测到 CPU 核心信息（--）",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            telemetry.cpu.cores.forEach { core ->
+                                val freqText = if (core.freqMhz > 0) "${core.freqMhz} MHz" else "--"
+                                val usageText = if (telemetry.cpu.isAvailable) "${core.usagePercent}%" else "--"
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "Core #${core.coreIndex}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = "$freqText · $usageText",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    LinearProgressIndicator(
+                                        progress = { (core.usagePercent / 100f).coerceIn(0f, 1f) },
+                                        modifier = Modifier.fillMaxWidth()
                                     )
                                 }
-                                LinearProgressIndicator(
-                                    progress = { (core.usagePercent / 100f).coerceIn(0f, 1f) },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
                             }
                         }
                     }

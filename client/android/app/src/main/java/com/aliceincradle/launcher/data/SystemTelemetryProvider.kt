@@ -110,8 +110,11 @@ class SystemTelemetryProvider(
             safeLogDebug("Build.HARDWARE unavailable: ${e.message}")
             "Device"
         }
-        val resolved = eglRenderer ?: probeGpuFromActivityManager(context, hardwareName) ?: "$hardwareName (GPU)"
-        cachedGpuRenderer = resolved
+        val amRenderer = probeGpuFromActivityManager(context, hardwareName)
+        val resolved = eglRenderer ?: amRenderer ?: "$hardwareName (GPU)"
+        if (eglRenderer != null || amRenderer != null || context != null) {
+            cachedGpuRenderer = resolved
+        }
         return resolved
     }
 
@@ -523,7 +526,7 @@ class SystemTelemetryProvider(
             raw > 150f -> raw / 10f
             else -> raw
         }
-        return celsius.takeIf { it > -20f && it < 150f }
+        return celsius.takeIf { it > 0.1f && it < 150f }
     }
 
     private fun formatThermalZoneName(rawType: String): String {

@@ -64,6 +64,11 @@ class EnvDetector(
                 val process = ProcessBuilder(listOf(bin, "--version"))
                     .redirectErrorStream(true)
                     .start()
+                try {
+                    process.outputStream.close()
+                } catch (e: IOException) {
+                    SafeProbeIo.debug(TAG, "Closing outputStream failed for $bin: ${e.message}")
+                }
                 val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
                 try {
                     process.errorStream.close()

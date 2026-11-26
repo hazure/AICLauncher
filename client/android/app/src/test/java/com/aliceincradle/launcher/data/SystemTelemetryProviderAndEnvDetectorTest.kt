@@ -97,6 +97,9 @@ class SystemTelemetryProviderAndEnvDetectorTest {
     fun degradesGracefullyWhenProcStatThermalGpuAndPythonAreUnavailable() = runBlocking {
         val emptyProc = tempFolder.newFolder("empty_proc")
         val emptySys = tempFolder.newFolder("empty_sys")
+        val zeroZone = File(emptySys, "class/thermal/thermal_zone0").apply { mkdirs() }
+        File(zeroZone, "type").writeText("unused-zone")
+        File(zeroZone, "temp").writeText("0")
         val cpuRoot = File(emptySys, "devices/system/cpu").apply { mkdirs() }
         File(cpuRoot, "online").writeText("0-1")
         val cpufreq0 = File(cpuRoot, "cpu0/cpufreq").apply { mkdirs() }

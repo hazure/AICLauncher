@@ -80,8 +80,7 @@ data class DownloadTaskItem(
 object TelemetryPreviewFactory {
     fun createPreview(
         coreCount: Int = Runtime.getRuntime().availableProcessors().coerceIn(4, 12),
-        gpuRenderer: String = "检测中...",
-        isGameRunning: Boolean = false
+        gpuRenderer: String = "检测中..."
     ): SystemTelemetry {
         val coreList = (0 until coreCount).map { idx ->
             CpuCoreStat(
@@ -96,7 +95,7 @@ object TelemetryPreviewFactory {
             memory = MemoryStats(
                 usagePercent = 0f,
                 launcherMb = 0,
-                gameMb = if (isGameRunning) 0 else 0,
+                gameMb = 0,
                 pmlMb = 0,
                 containerTotalMb = 0,
                 isAvailable = false
