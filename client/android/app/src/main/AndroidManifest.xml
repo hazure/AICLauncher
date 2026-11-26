@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="AIC 启动器">
+        android:label="AICL Beta Ver.A">
         <activity
             android:name=".MainActivity"
             android:exported="true">
