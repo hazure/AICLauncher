@@ -1,7 +1,6 @@
 package com.aliceincradle.launcher.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,21 +30,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.aliceincradle.launcher.data.DeviceInfo
+import com.aliceincradle.launcher.data.DownloadTaskItem
+import com.aliceincradle.launcher.data.GameProcessState
+import com.aliceincradle.launcher.data.SystemTelemetry
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
-    val info = uiState.deviceInfo
 
     Scaffold(
         floatingActionButton = {
-            FloatingActionButtonGroup(
-                visibility = uiState.fabVisibility,
-                downloadCount = uiState.downloadTasks.size,
-                onLaunchClick = { viewModel.launchGame() },
-                onTerminateClick = { viewModel.terminateGame() },
-                onDownloadsClick = { viewModel.openDownloadSheet() }
-            )
+            if (uiState.selectedTab != MainTab.FILES) {
+                FloatingActionButtonGroup(
+                    visibility = uiState.fabVisibility,
+                    downloadCount = uiState.downloadTasks.size,
+                    onLaunchClick = { viewModel.launchGame() },
+                    onTerminateClick = { viewModel.terminateGame() },
+                    onDownloadsClick = { viewModel.openDownloadSheet() }
+                )
+            }
         },
         bottomBar = {
             NavigationBar {
@@ -66,8 +70,23 @@ fun MainScreen(viewModel: MainViewModel) {
             }
         }
     ) { innerPadding ->
-        if (uiState.selectedTab == MainTab.DOWNLOAD) {
-            DownloadScreen(
+        val contentModifier = Modifier
+            .fillMaxSize()
+            .padding(innerPadding)
+
+        when (uiState.selectedTab) {
+            MainTab.HOME -> HomeTabContent(
+                deviceInfo = uiState.deviceInfo,
+                telemetry = uiState.telemetry,
+                gameProcess = uiState.gameProcess,
+                downloadTasks = uiState.downloadTasks,
+                onGaugeClick = { viewModel.openTelemetryDialog(it) },
+                onNormalExit = { viewModel.exitGameNormally() },
+                onToggleSampleDownloads = { viewModel.toggleSampleDownloads() },
+                modifier = contentModifier
+            )
+
+            MainTab.DOWNLOAD -> DownloadScreen(
                 state = uiState.downloadPage,
                 onQueryChange = { viewModel.updateDownloadQuery(it) },
                 onAppSelect = { viewModel.selectDownloadApp(it) },
@@ -78,91 +97,29 @@ fun MainScreen(viewModel: MainViewModel) {
                 onDownloadClick = { viewModel.triggerCatalogDownload(it) },
                 onDetailClick = { viewModel.openCatalogItemDetail(it) },
                 onDismissDetail = { viewModel.dismissCatalogItemDetail() },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
+                modifier = contentModifier
             )
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                TelemetryDashboardCard(
-                    telemetry = uiState.telemetry,
-                    onGaugeClick = { dialogType -> viewModel.openTelemetryDialog(dialogType) }
-                )
 
-                GameStatusCard(
-                    processState = uiState.gameProcess,
-                    onNormalExit = { viewModel.exitGameNormally() }
-                )
+            MainTab.FILES -> FolderScreen(
+                state = uiState.folderPage,
+                onSelectItem = { viewModel.selectFolderItem(it) },
+                onActionClick = { viewModel.performFolderAction(it) },
+                onDismissItemInfo = { viewModel.dismissFolderItemInfo() },
+                modifier = contentModifier
+            )
 
-                when (uiState.selectedTab) {
-                    MainTab.HOME -> {
-                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = "硬件与运行环境（动态探测）",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                InfoRow(label = "CPU", value = info.cpu)
-                                InfoRow(label = "GPU", value = info.gpu)
-                                InfoRow(label = "内存", value = info.memory)
-                                InfoRow(label = "Android", value = info.androidVersion)
-                                InfoRow(label = "Python", value = info.pythonVersion)
-                                InfoRow(label = "AIC 版本", value = info.aicVersion)
-                            }
-                        }
-
-                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "下载队列调试",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Text(
-                                        text = if (uiState.downloadTasks.isEmpty()) "当前无下载任务（按钮隐藏）" else "进行中：${uiState.downloadTasks.size} 项",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                OutlinedButton(onClick = { viewModel.toggleSampleDownloads() }) {
-                                    Text(text = if (uiState.downloadTasks.isEmpty()) "模拟下载" else "清空下载")
-                                }
-                            }
-                        }
-                    }
-
-                    MainTab.DOWNLOAD -> Unit
-
-                    MainTab.FILES -> {
-                        PlaceholderTabCard(text = "文件夹管理（占位）")
-                    }
-
-                    MainTab.SETTINGS -> {
-                        PlaceholderTabCard(text = "设置（占位）")
-                    }
-                }
-            }
+            MainTab.SETTINGS -> SettingsScreen(
+                state = uiState.settingsPage,
+                onPythonVersionSelect = { viewModel.selectPythonVersion(it) },
+                onPythonWarningClick = { viewModel.triggerPythonDownloadHint() },
+                onPythonDirSelect = { viewModel.selectPythonDir(it) },
+                onOpenCustomPathDialog = { viewModel.openCustomPathDialog() },
+                onCustomPathDraftChange = { viewModel.updateCustomPathDraft(it) },
+                onConfirmCustomPath = { viewModel.confirmCustomPath() },
+                onDismissCustomPathDialog = { viewModel.dismissCustomPathDialog() },
+                onReservedSectionClick = { viewModel.triggerReservedPythonAction() },
+                modifier = contentModifier
+            )
         }
     }
 
@@ -180,18 +137,79 @@ fun MainScreen(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun PlaceholderTabCard(text: String) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(180.dp),
-        contentAlignment = Alignment.Center
+private fun HomeTabContent(
+    deviceInfo: DeviceInfo,
+    telemetry: SystemTelemetry,
+    gameProcess: GameProcessState,
+    downloadTasks: List<DownloadTaskItem>,
+    onGaugeClick: (TelemetryDialogType) -> Unit,
+    onNormalExit: () -> Unit,
+    onToggleSampleDownloads: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+        TelemetryDashboardCard(
+            telemetry = telemetry,
+            onGaugeClick = onGaugeClick
         )
+
+        GameStatusCard(
+            processState = gameProcess,
+            onNormalExit = onNormalExit
+        )
+
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "硬件与运行环境（动态探测）",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                InfoRow(label = "CPU", value = deviceInfo.cpu)
+                InfoRow(label = "GPU", value = deviceInfo.gpu)
+                InfoRow(label = "内存", value = deviceInfo.memory)
+                InfoRow(label = "Android", value = deviceInfo.androidVersion)
+                InfoRow(label = "Python", value = deviceInfo.pythonVersion)
+                InfoRow(label = "AIC 版本", value = deviceInfo.aicVersion)
+            }
+        }
+
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "下载队列调试",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = if (downloadTasks.isEmpty()) "当前无下载任务（按钮隐藏）" else "进行中：${downloadTasks.size} 项",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OutlinedButton(onClick = onToggleSampleDownloads) {
+                    Text(text = if (downloadTasks.isEmpty()) "模拟下载" else "清空下载")
+                }
+            }
+        }
     }
 }
 

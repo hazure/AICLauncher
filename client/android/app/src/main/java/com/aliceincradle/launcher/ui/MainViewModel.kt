@@ -11,8 +11,11 @@ import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadFilterState
 import com.aliceincradle.launcher.data.DownloadPageState
 import com.aliceincradle.launcher.data.DownloadTaskItem
+import com.aliceincradle.launcher.data.FolderAction
+import com.aliceincradle.launcher.data.FolderPageState
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
+import com.aliceincradle.launcher.data.SettingsPageState
 import com.aliceincradle.launcher.data.SystemTelemetry
 import com.aliceincradle.launcher.data.TelemetryPreviewFactory
 import kotlinx.coroutines.Dispatchers
@@ -56,7 +59,9 @@ data class MainUiState(
     val isDownloadSheetOpen: Boolean = false,
     val canLaunchGame: Boolean = true,
     val selectedTab: MainTab = MainTab.HOME,
-    val downloadPage: DownloadPageState = DownloadPageState()
+    val downloadPage: DownloadPageState = DownloadPageState(),
+    val folderPage: FolderPageState = FolderPageState(),
+    val settingsPage: SettingsPageState = SettingsPageState()
 ) {
     val fabVisibility: FabGroupVisibility
         get() = FabGroupVisibility(
@@ -254,6 +259,159 @@ class MainViewModel : ViewModel() {
     fun dismissCatalogItemDetail() {
         _uiState.update { state ->
             state.copy(downloadPage = state.downloadPage.copy(selectedDetailItem = null))
+        }
+    }
+
+    fun selectFolderItem(itemId: String) {
+        _uiState.update { state ->
+            state.copy(folderPage = state.folderPage.copy(selectedItemId = itemId))
+        }
+    }
+
+    fun performFolderAction(action: FolderAction) {
+        _uiState.update { state ->
+            val folder = state.folderPage
+            val target = folder.items.find { it.id == folder.selectedItemId } ?: folder.items.firstOrNull()
+            when (action) {
+                FolderAction.INFO -> state.copy(
+                    folderPage = folder.copy(
+                        inspectedItem = target,
+                        actionNotice = target?.let { "查看属性：${it.name}" }
+                    )
+                )
+                FolderAction.DELETE -> state.copy(
+                    folderPage = folder.copy(
+                        actionNotice = target?.let { "模拟删除预览（未修改原文件）：${it.name}" }
+                            ?: "当前没有可删除的项目"
+                    )
+                )
+                FolderAction.COPY -> state.copy(
+                    folderPage = folder.copy(
+                        clipboardItemName = target?.name,
+                        actionNotice = target?.let { "已复制：${it.name}" } ?: "未选择要复制的项目"
+                    )
+                )
+                FolderAction.PLACE -> {
+                    val clip = folder.clipboardItemName
+                    state.copy(
+                        folderPage = folder.copy(
+                            actionNotice = if (clip != null) "已放置副本：$clip" else "剪贴板为空，请先执行 Copy"
+                        )
+                    )
+                }
+                FolderAction.RUNNING -> {
+                    val pid = nextSimulatedPid++
+                    val runningState = GameProcessState(
+                        status = GameRunStatus.RUNNING,
+                        versionName = "AIC 0.3.0",
+                        pid = pid
+                    )
+                    state.copy(
+                        gameProcess = runningState,
+                        telemetry = TelemetryPreviewFactory.createPreview(
+                            gpuRenderer = state.deviceInfo.gpu,
+                            isGameRunning = true
+                        ),
+                        folderPage = folder.copy(
+                            actionNotice = "已模拟启动：${target?.name ?: "AliceInCradle.exe"} (PID: $pid)"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissFolderItemInfo() {
+        _uiState.update { state ->
+            state.copy(folderPage = state.folderPage.copy(inspectedItem = null))
+        }
+    }
+
+    fun selectPythonVersion(version: String) {
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    selectedPythonVersion = version,
+                    statusNotice = "已选择版本：$version"
+                )
+            )
+        }
+    }
+
+    fun triggerPythonDownloadHint() {
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    statusNotice = "已触发 Python 下载指引（模拟状态）"
+                )
+            )
+        }
+    }
+
+    fun selectPythonDir(dir: String) {
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    selectedPythonDir = dir,
+                    statusNotice = "已切换目录：$dir"
+                )
+            )
+        }
+    }
+
+    fun openCustomPathDialog() {
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    isCustomPathDialogOpen = true,
+                    customPathDraft = state.settingsPage.selectedPythonDir
+                )
+            )
+        }
+    }
+
+    fun updateCustomPathDraft(draft: String) {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(customPathDraft = draft))
+        }
+    }
+
+    fun confirmCustomPath() {
+        _uiState.update { state ->
+            val trimmed = state.settingsPage.customPathDraft.trim()
+            if (trimmed.isEmpty()) {
+                return@update state.copy(
+                    settingsPage = state.settingsPage.copy(
+                        isCustomPathDialogOpen = false,
+                        statusNotice = "路径不能为空，已保留当前配置"
+                    )
+                )
+            }
+            val nextOptions = (listOf(trimmed) + state.settingsPage.pythonDirOptions).distinct()
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    selectedPythonDir = trimmed,
+                    pythonDirOptions = nextOptions,
+                    isCustomPathDialogOpen = false,
+                    statusNotice = "已更新自定义目录：$trimmed"
+                )
+            )
+        }
+    }
+
+    fun dismissCustomPathDialog() {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(isCustomPathDialogOpen = false))
+        }
+    }
+
+    fun triggerReservedPythonAction() {
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    statusNotice = "预留项已点击：${state.settingsPage.reservedButtonLabel}"
+                )
+            )
         }
     }
 

@@ -1,11 +1,8 @@
 package com.aliceincradle.launcher.ui
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,28 +12,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -46,26 +37,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.aliceincradle.launcher.data.DownloadCatalogItem
 import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadFilterState
 import com.aliceincradle.launcher.data.DownloadPageState
-import kotlin.math.roundToInt
 
 @Composable
 fun DownloadScreen(
@@ -203,7 +186,7 @@ private fun DownloadFilterSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FilterDropdownButton(
+            AppDropdownButton(
                 selectedValue = filter.selectedApp,
                 options = filter.appOptions,
                 onOptionSelected = onAppSelect,
@@ -230,7 +213,7 @@ private fun DownloadFilterSection(
                 }
             )
 
-            FilterDropdownButton(
+            AppDropdownButton(
                 selectedValue = filter.selectedVersion,
                 options = filter.versionOptions,
                 onOptionSelected = onVersionSelect,
@@ -239,7 +222,7 @@ private fun DownloadFilterSection(
                     .testTag("dropdown_version")
             )
 
-            FilterDropdownButton(
+            AppDropdownButton(
                 selectedValue = filter.selectedCategory,
                 options = filter.categoryOptions,
                 onOptionSelected = onCategorySelect,
@@ -264,70 +247,6 @@ private fun DownloadFilterSection(
                 checked = filter.includeFeaturedMods,
                 onCheckedChange = onIncludeFeaturedChange
             )
-        }
-    }
-}
-
-@Composable
-private fun FilterDropdownButton(
-    selectedValue: String,
-    options: List<String>,
-    onOptionSelected: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    leadingContent: (@Composable () -> Unit)? = null
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    Box(modifier = modifier) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 40.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .clickable { expanded = true },
-            shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                if (leadingContent != null) {
-                    leadingContent()
-                }
-                Text(
-                    text = selectedValue,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    imageVector = Icons.Default.ArrowDropDown,
-                    contentDescription = "展开选项",
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-        }
-
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(text = option) },
-                    onClick = {
-                        expanded = false
-                        onOptionSelected(option)
-                    }
-                )
-            }
         }
     }
 }
@@ -386,21 +305,7 @@ private fun DownloadCatalogRowCard(
                     .testTag("status_icon_${item.id}")
             )
 
-            Surface(
-                modifier = Modifier.size(48.dp),
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = item.logoText,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        maxLines = 1
-                    )
-                }
-            }
+            PlaceholderLogoBox(text = item.logoText, size = 48.dp)
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -457,65 +362,6 @@ private fun DownloadCatalogRowCard(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-fun VerticalScrollbar(
-    listState: LazyListState,
-    modifier: Modifier = Modifier
-) {
-    val layoutInfo by remember { derivedStateOf { listState.layoutInfo } }
-    val canScroll by remember {
-        derivedStateOf { listState.canScrollForward || listState.canScrollBackward }
-    }
-
-    BoxWithConstraints(
-        modifier = modifier,
-        contentAlignment = Alignment.TopCenter
-    ) {
-        val density = LocalDensity.current
-        val trackHeightPx = with(density) { maxHeight.toPx() }
-        val minThumbPx = with(density) { 28.dp.toPx() }
-        val trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-        val thumbColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.78f)
-
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(5.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(trackColor)
-        )
-
-        val visibleItems = layoutInfo.visibleItemsInfo
-        val totalItems = layoutInfo.totalItemsCount
-        if (canScroll && totalItems > 0 && visibleItems.isNotEmpty() && trackHeightPx > 0f) {
-            val viewportHeight = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset)
-                .toFloat()
-                .coerceAtLeast(1f)
-            val avgItemSize = (visibleItems.sumOf { it.size }.toFloat() / visibleItems.size)
-                .coerceAtLeast(1f)
-            val estimatedTotalSize = (avgItemSize * totalItems).coerceAtLeast(viewportHeight)
-            val thumbHeightPx = (trackHeightPx * (viewportHeight / estimatedTotalSize))
-                .coerceIn(minThumbPx.coerceAtMost(trackHeightPx), trackHeightPx)
-            val scrollOffsetPx =
-                listState.firstVisibleItemIndex * avgItemSize + listState.firstVisibleItemScrollOffset
-            val maxScrollPx = (estimatedTotalSize - viewportHeight).coerceAtLeast(1f)
-            val scrollFraction = (scrollOffsetPx / maxScrollPx).coerceIn(0f, 1f)
-            val thumbOffsetPx = (trackHeightPx - thumbHeightPx) * scrollFraction
-            val thumbHeightDp = with(density) { thumbHeightPx.toDp() }
-
-            Box(
-                modifier = Modifier
-                    .offset { IntOffset(0, thumbOffsetPx.roundToInt()) }
-                    .width(5.dp)
-                    .height(thumbHeightDp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(thumbColor)
-                    .testTag("download_scrollbar_thumb")
-            )
         }
     }
 }

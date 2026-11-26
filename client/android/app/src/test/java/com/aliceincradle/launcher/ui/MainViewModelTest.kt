@@ -2,6 +2,8 @@ package com.aliceincradle.launcher.ui
 
 import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadTaskItem
+import com.aliceincradle.launcher.data.FolderAction
+import com.aliceincradle.launcher.data.FolderEntryType
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
 import org.junit.Assert.assertEquals
@@ -101,5 +103,61 @@ class MainViewModelTest {
         assertEquals(firstItem.id, vm.uiState.value.downloadPage.selectedDetailItem?.id)
         vm.dismissCatalogItemDetail()
         assertNull(vm.uiState.value.downloadPage.selectedDetailItem)
+    }
+
+    @Test
+    fun folderPageExposesStatsTypesAndActionTransitions() {
+        val vm = MainViewModel()
+        val folder = vm.uiState.value.folderPage
+
+        assertEquals("共 3 个文件夹，7 个文件", folder.countSummary)
+        assertEquals("共占 37GB", folder.totalSizeSummary)
+        assertEquals(10, folder.items.size)
+        val types = folder.items.map { it.type }.toSet()
+        assertTrue(types.contains(FolderEntryType.FOLDER))
+        assertTrue(types.contains(FolderEntryType.TEXT))
+        assertTrue(types.contains(FolderEntryType.PYTHON))
+        assertTrue(types.contains(FolderEntryType.SHELL))
+        assertTrue(types.contains(FolderEntryType.EXECUTABLE))
+        assertEquals("AliceInCradle.exe", folder.items.last().name)
+        assertTrue(folder.items.last().isLauncherTarget)
+
+        vm.selectFolderItem("file-patch-py")
+        vm.performFolderAction(FolderAction.INFO)
+        assertEquals("file-patch-py", vm.uiState.value.folderPage.inspectedItem?.id)
+        vm.dismissFolderItemInfo()
+        assertNull(vm.uiState.value.folderPage.inspectedItem)
+
+        vm.performFolderAction(FolderAction.COPY)
+        assertEquals("patch_unsafeAssem.py", vm.uiState.value.folderPage.clipboardItemName)
+        vm.performFolderAction(FolderAction.PLACE)
+        assertTrue(vm.uiState.value.folderPage.actionNotice?.contains("patch_unsafeAssem.py") == true)
+
+        vm.performFolderAction(FolderAction.RUNNING)
+        assertTrue(vm.uiState.value.gameProcess.isAlive)
+    }
+
+    @Test
+    fun settingsPageExposesPythonDefaultsAndUpdatesCustomPath() {
+        val vm = MainViewModel()
+        val settings = vm.uiState.value.settingsPage
+
+        assertEquals("Python 3.10", settings.selectedPythonVersion)
+        assertEquals("无法检测到？点击下载 Python！", settings.pythonWarningText)
+        assertEquals("D:/python", settings.selectedPythonDir)
+        assertEquals("自定义路径选择", settings.customPathButtonText)
+        assertEquals("Python 设置", settings.reservedButtonLabel)
+        assertEquals("此处不再多举例！", settings.reservedHintText)
+
+        vm.selectPythonVersion("Python 3.11")
+        assertEquals("Python 3.11", vm.uiState.value.settingsPage.selectedPythonVersion)
+
+        vm.openCustomPathDialog()
+        assertTrue(vm.uiState.value.settingsPage.isCustomPathDialogOpen)
+        vm.updateCustomPathDraft("E:/tools/python311")
+        vm.confirmCustomPath()
+        assertFalse(vm.uiState.value.settingsPage.isCustomPathDialogOpen)
+        assertEquals("E:/tools/python311", vm.uiState.value.settingsPage.selectedPythonDir)
+        assertTrue(vm.uiState.value.settingsPage.pythonDirOptions.contains("E:/tools/python311"))
     }
 }
