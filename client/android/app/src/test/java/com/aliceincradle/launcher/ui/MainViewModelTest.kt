@@ -88,7 +88,7 @@ class MainViewModelTest {
         assertTrue(statuses.contains(DownloadContentStatus.DOWNLOADING))
         assertTrue(statuses.contains(DownloadContentStatus.DISABLED))
 
-        vm.updateDownloadQuery("Legacy")
+        vm.updateDownloadQuery("Legacy Relic")
         assertEquals(1, vm.uiState.value.downloadPage.items.size)
         assertEquals("mod-legacy-relic", vm.uiState.value.downloadPage.items.first().id)
 
