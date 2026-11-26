@@ -27,8 +27,6 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-provider: basic
 
       - name: Run Unit Tests, Lint, and Build Debug APK
         working-directory: client/android

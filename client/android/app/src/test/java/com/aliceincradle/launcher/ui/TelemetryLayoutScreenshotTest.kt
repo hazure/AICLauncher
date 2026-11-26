@@ -67,13 +67,13 @@ class TelemetryLayoutScreenshotTest {
         }
         composeTestRule.waitForIdle()
 
-        val memBounds = composeTestRule.onNodeWithTag("gauge_ring_运存")
+        val memBounds = composeTestRule.onNodeWithTag("gauge_ring_运存", useUnmergedTree = true)
             .fetchSemanticsNode()
             .boundsInRoot
-        val cpuBounds = composeTestRule.onNodeWithTag("gauge_ring_CPU")
+        val cpuBounds = composeTestRule.onNodeWithTag("gauge_ring_CPU", useUnmergedTree = true)
             .fetchSemanticsNode()
             .boundsInRoot
-        val gpuBounds = composeTestRule.onNodeWithTag("gauge_ring_GPU")
+        val gpuBounds = composeTestRule.onNodeWithTag("gauge_ring_GPU", useUnmergedTree = true)
             .fetchSemanticsNode()
             .boundsInRoot
 
