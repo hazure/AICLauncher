@@ -300,6 +300,11 @@ class MainViewModel : ViewModel() {
                     )
                 }
                 FolderAction.RUNNING -> {
+                    if (!state.canLaunchGame) {
+                        return@update state.copy(
+                            folderPage = folder.copy(actionNotice = "当前运行环境未就绪，暂不可启动")
+                        )
+                    }
                     val pid = nextSimulatedPid++
                     val runningState = GameProcessState(
                         status = GameRunStatus.RUNNING,

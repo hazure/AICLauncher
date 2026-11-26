@@ -128,11 +128,19 @@ class MainViewModelTest {
         vm.dismissFolderItemInfo()
         assertNull(vm.uiState.value.folderPage.inspectedItem)
 
+        vm.performFolderAction(FolderAction.PLACE)
+        assertEquals("剪贴板为空，请先执行 Copy", vm.uiState.value.folderPage.actionNotice)
+
         vm.performFolderAction(FolderAction.COPY)
         assertEquals("patch_unsafeAssem.py", vm.uiState.value.folderPage.clipboardItemName)
         vm.performFolderAction(FolderAction.PLACE)
         assertTrue(vm.uiState.value.folderPage.actionNotice?.contains("patch_unsafeAssem.py") == true)
 
+        vm.setCanLaunchGame(false)
+        vm.performFolderAction(FolderAction.RUNNING)
+        assertFalse(vm.uiState.value.gameProcess.isAlive)
+
+        vm.setCanLaunchGame(true)
         vm.performFolderAction(FolderAction.RUNNING)
         assertTrue(vm.uiState.value.gameProcess.isAlive)
     }
@@ -159,5 +167,11 @@ class MainViewModelTest {
         assertFalse(vm.uiState.value.settingsPage.isCustomPathDialogOpen)
         assertEquals("E:/tools/python311", vm.uiState.value.settingsPage.selectedPythonDir)
         assertTrue(vm.uiState.value.settingsPage.pythonDirOptions.contains("E:/tools/python311"))
+        vm.openCustomPathDialog()
+        assertTrue(vm.uiState.value.settingsPage.isCustomPathDialogOpen)
+        vm.updateCustomPathDraft("   ")
+        vm.confirmCustomPath()
+        assertFalse(vm.uiState.value.settingsPage.isCustomPathDialogOpen)
+        assertEquals("E:/tools/python311", vm.uiState.value.settingsPage.selectedPythonDir)
     }
 }
