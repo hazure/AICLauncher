@@ -25,15 +25,27 @@ jobs:
         with:
           packages: 'platform-tools'
 
-      - name: Build Debug APK
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-provider: basic
+
+      - name: Run Unit Tests, Lint, and Build Debug APK
         working-directory: client/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew testDebugUnitTest lintDebug assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: AIC-Launcher-Debug
           path: client/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload UI Screenshot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIC-Launcher-Screenshots
+          path: client/android/app/build/reports/screenshots/*.png
           if-no-files-found: error
