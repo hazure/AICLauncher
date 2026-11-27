@@ -727,14 +727,12 @@ fun SettingsScreen(
             onDismissRequest = onDismissDisclaimerDialog,
             title = { Text(text = "AICL 使用协议与免责声明") },
             text = {
-                Text(
-                    text = "0. 此项目初始化需要联网，会收集<...>以上信息，用于检查<...>操作。\n" +
-                        "1. 不帮助未成年人。\n" +
-                        "2. 不允许未成年人接触此软件。\n" +
-                        "3. 此项目仅供学习，下载后请在24小时内自行删除！\n" +
-                        "4. 与 AIC 官方无关，绝不接受任何来自 AICL 以外 Issue。\n" +
-                        "5. 请勿骚扰 AIC 官方，一旦发现，本项目将封禁此用户使用本软件。"
-                )
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    AiclDisclaimerContent()
+                }
             },
             confirmButton = {
                 TextButton(onClick = onDismissDisclaimerDialog) {

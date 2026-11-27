@@ -25,7 +25,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 
 /**
@@ -70,30 +73,7 @@ fun AgreementScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "0. 此项目初始化需要联网，会收集<...>以上信息，用于检查<...>操作。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "1. 不帮助未成年人。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "2. 不允许未成年人接触此软件。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "3. 此项目仅供学习，下载后请在24小时内自行删除！",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "4. 与 AIC 官方无关，绝不接受任何来自 AICL 以外 Issue。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "5. 请勿骚扰 AIC 官方，一旦发现，本项目将封禁此用户使用本软件。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    AiclDisclaimerContent()
                 }
             }
 
@@ -112,8 +92,9 @@ fun AgreementScreen(
                     modifier = Modifier.testTag("agreement_checkbox")
                 )
                 Text(
-                    text = "我已阅读并同意上述声明与风险",
+                    text = "我已年满 18 周岁，已阅读并同意上述免责声明及 MIT 开源协议，知晓违规使用后果自负。",
                     style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(start = 8.dp)
                 )
             }
@@ -144,4 +125,39 @@ fun AgreementScreen(
             }
         }
     }
+}
+
+private val DISCLAIMER_CLAUSES = listOf(
+    "0. " to ("严禁未成年人使用" to "：本软件仅面向已满 18 周岁的成年用户。鉴于《Alice In Cradle》游戏本身包含成人内容及社区争议，我们坚决禁止未成年人使用本软件。若未成年人私自使用，后果由未成年人及未成年人监护人自负；后果由未成年人及未成年人监护人自负；后果由未成年人及未成年人监护人自负！如您未满 18 周岁，请立即停止使用并删除本软件。"),
+    "1. " to ("学习交流性质" to "：本项目仅供技术学习与交流使用，严禁用于任何商业用途、倒卖或非法途径。下载后请在 24 小时内自行删除。"),
+    "2. " to ("无官方关联" to "：本软件不包含游戏本体。本项目绝不接受任何与游戏本体相关的 Issue 反馈。请勿就本软件的使用问题骚扰官方或原作者。"),
+    "3. " to ("使用风险自担" to "：您明确知晓并同意，使用本软件的风险由您自行承担。本软件按“现状”提供，不附带任何明示或暗示的担保。因使用本软件（包括但不限于容器配置、Mod 加载、文件操作）导致的设备损坏、数据丢失或游戏崩溃，开发者不承担任何责任。"),
+    "4. " to ("用户行为约束" to "：严禁利用本软件从事任何违反法律法规或侵犯他人权益的行为。因用户违规行为引发的任何纠纷或损失，由用户自行承担。"),
+    "5. " to ("条款接受" to "：您下载、安装或使用本软件，即视为您已阅读、理解并同意本免责声明的全部内容。")
+)
+
+@Composable
+internal fun AiclDisclaimerContent() {
+    Text(
+        text = "本软件（AliceInCradle Launcher，简称 AICL）采用 MIT 许可证开源。本软件为第三方开源项目，与《Alice In Cradle》游戏官方及原作者（下称“官方”）无任何关联。《Alice In Cradle》包含限制级内容，在下载、安装或使用本软件前，请仔细阅读以下条款：",
+        style = MaterialTheme.typography.bodyMedium
+    )
+    DISCLAIMER_CLAUSES.forEach { (prefix, titleAndBody) ->
+        val (title, body) = titleAndBody
+        Text(
+            text = buildAnnotatedString {
+                append(prefix)
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    append(title)
+                }
+                append(body)
+            },
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+    Text(
+        text = "如您不同意上述任何条款，请立即停止使用并删除本软件。",
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.Bold
+    )
 }
