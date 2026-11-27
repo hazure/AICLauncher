@@ -7,7 +7,9 @@ import com.aliceincradle.launcher.data.FileManagerDialog
 import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderEntryType
 import com.aliceincradle.launcher.data.PosixPermissions
+import com.aliceincradle.launcher.data.SettingsManager
 import com.aliceincradle.launcher.data.SystemTelemetryProvider
+import com.aliceincradle.launcher.data.validateEnvVars
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -238,5 +240,52 @@ class MainViewModelTest {
         assertEquals(0.75f, refreshed.telemetry.memory.usagePercent, 0.01f)
         assertEquals(51, refreshed.telemetry.thermal.headlineTempC)
         assertEquals(EnvDetector.MISSING_PYTHON_LABEL, refreshed.deviceInfo.pythonVersion)
+    }
+
+    @Test
+    fun settingsManagerPersistsAtomicallyAndDevModeUnlocksAfter7Taps() = runBlocking {
+        val storeFile = File(tempFolder.root, "aicl_settings_test.json")
+        val manager = SettingsManager(
+            storageFile = storeFile,
+            ioDispatcher = Dispatchers.Unconfined,
+            debounceMs = 0L
+        )
+        val vm = MainViewModel(
+            ioDispatcher = Dispatchers.Unconfined,
+            autoStartPolling = false,
+            settingsManager = manager
+        )
+
+        assertEquals("第 1 行格式错误：必须包含 '=' 且键名不能为空", validateEnvVars("INVALID_LINE"))
+        assertNull(validateEnvVars("MESA_GL_VERSION_OVERRIDE=4.6\nPROTON_LOG=1"))
+
+        vm.setContainerMountPath("content://com.android.externalstorage.documents/tree/primary%3AAIC")
+        vm.selectCpuCoreLimit(4)
+        vm.openEnvVarsDialog()
+        vm.updateEnvVarsDraft("BAD_ENV")
+        vm.confirmEnvVars()
+        assertTrue(vm.uiState.value.settingsPage.envVarsError != null)
+        vm.updateEnvVarsDraft("FOO=bar")
+        vm.confirmEnvVars()
+        assertNull(vm.uiState.value.settingsPage.envVarsError)
+        assertEquals("FOO=bar", vm.uiState.value.settingsPage.customEnvVars)
+
+        repeat(6) { vm.onVersionRowClick() }
+        assertFalse(vm.uiState.value.settingsPage.isDevModeUnlocked)
+        vm.onVersionRowClick()
+        assertTrue(vm.uiState.value.settingsPage.isDevModeUnlocked)
+
+        manager.flush()
+        val reloaded = SettingsManager(storageFile = storeFile, ioDispatcher = Dispatchers.Unconfined, debounceMs = 0L)
+        assertEquals(4, reloaded.settingsFlow.value.cpuCoreLimit)
+        assertEquals("FOO=bar", reloaded.settingsFlow.value.customEnvVars)
+        assertTrue(reloaded.settingsFlow.value.isDevModeUnlocked)
+
+        vm.openResetContainerDialog()
+        assertTrue(vm.uiState.value.settingsPage.isResetContainerDialogOpen)
+        vm.confirmResetContainerSettings()
+        assertFalse(vm.uiState.value.settingsPage.isResetContainerDialogOpen)
+        assertEquals(0, vm.uiState.value.settingsPage.cpuCoreLimit)
+        assertEquals("", vm.uiState.value.settingsPage.containerMountPath)
     }
 }

@@ -17,10 +17,13 @@ import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderPageState
 import com.aliceincradle.launcher.data.PathProvider
 import com.aliceincradle.launcher.data.PosixPermissions
+import com.aliceincradle.launcher.data.SettingsData
+import com.aliceincradle.launcher.data.SettingsManager
 import com.aliceincradle.launcher.data.SettingsPageState
 import com.aliceincradle.launcher.data.SystemTelemetry
 import com.aliceincradle.launcher.data.SystemTelemetryProvider
 import com.aliceincradle.launcher.data.TelemetryPreviewFactory
+import com.aliceincradle.launcher.data.validateEnvVars
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -70,7 +73,8 @@ class MainViewModel @JvmOverloads constructor(
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     autoStartPolling: Boolean = true,
     private val refreshIntervalMs: Long = 2_000L,
-    private val fileOpStepDelayMs: Long = 35L
+    private val fileOpStepDelayMs: Long = 35L,
+    private var settingsManager: SettingsManager? = null
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -96,6 +100,12 @@ class MainViewModel @JvmOverloads constructor(
 
     fun loadDeviceInfo(appContext: Context) {
         this.appContext = appContext.applicationContext
+        if (settingsManager == null) {
+            settingsManager = SettingsManager(this.appContext!!)
+        }
+        settingsManager?.settingsFlow?.value?.let { persisted ->
+            hydrateSettingsFromStore(persisted)
+        }
         if (hasLoadedContext) return
         hasLoadedContext = true
         probeScope.launch {
@@ -674,6 +684,260 @@ class MainViewModel @JvmOverloads constructor(
                     statusNotice = "预留项已点击：${state.settingsPage.reservedButtonLabel}"
                 )
             )
+        }
+    }
+
+    fun selectThemeMode(theme: String) {
+        updateSettingsState(immediate = false) { it.copy(themeMode = theme, statusNotice = "已切换主题：$theme") }
+    }
+
+    fun toggleShowHiddenFiles(enabled: Boolean) {
+        updateSettingsState(immediate = false) { it.copy(showHiddenFiles = enabled) }
+    }
+
+    fun toggleAutoCheckUpdate(enabled: Boolean) {
+        updateSettingsState(immediate = false) { it.copy(autoCheckUpdate = enabled) }
+    }
+
+    fun selectRootfsType(rootfs: String) {
+        updateSettingsState(immediate = false) { it.copy(rootfsType = rootfs) }
+    }
+
+    fun selectGraphicsRenderer(renderer: String) {
+        updateSettingsState(immediate = false) { it.copy(graphicsRenderer = renderer) }
+    }
+
+    fun setContainerMountPath(path: String) {
+        val cleaned = path.trim()
+        if (cleaned.isEmpty()) return
+        updateSettingsState(immediate = true) {
+            it.copy(containerMountPath = cleaned, statusNotice = "已挂载目录：$cleaned")
+        }
+    }
+
+    fun clearContainerMountPath() {
+        updateSettingsState(immediate = true) {
+            it.copy(containerMountPath = "", statusNotice = "已清除挂载目录")
+        }
+    }
+
+    fun selectCpuCoreLimit(cores: Int) {
+        updateSettingsState(immediate = false) { it.copy(cpuCoreLimit = cores) }
+    }
+
+    fun selectMemLimitMB(memMb: Int) {
+        updateSettingsState(immediate = false) { it.copy(memLimitMB = memMb) }
+    }
+
+    fun openResetContainerDialog() {
+        _uiState.update { it.copy(settingsPage = it.settingsPage.copy(isResetContainerDialogOpen = true)) }
+    }
+
+    fun dismissResetContainerDialog() {
+        _uiState.update { it.copy(settingsPage = it.settingsPage.copy(isResetContainerDialogOpen = false)) }
+    }
+
+    fun confirmResetContainerSettings() {
+        updateSettingsState(immediate = true) {
+            it.copy(
+                rootfsType = "Termux Proot (Ubuntu)",
+                graphicsRenderer = "Turnip + DXVK",
+                containerMountPath = "",
+                cpuCoreLimit = 0,
+                memLimitMB = 0,
+                isResetContainerDialogOpen = false,
+                statusNotice = "已重置容器运行配置"
+            )
+        }
+    }
+
+    fun openEnvVarsDialog() {
+        _uiState.update {
+            it.copy(
+                settingsPage = it.settingsPage.copy(
+                    isEnvVarsDialogOpen = true,
+                    envVarsDraft = it.settingsPage.customEnvVars,
+                    envVarsError = null
+                )
+            )
+        }
+    }
+
+    fun updateEnvVarsDraft(draft: String) {
+        _uiState.update {
+            it.copy(
+                settingsPage = it.settingsPage.copy(
+                    envVarsDraft = draft,
+                    envVarsError = null
+                )
+            )
+        }
+    }
+
+    fun confirmEnvVars() {
+        val draft = _uiState.value.settingsPage.envVarsDraft
+        val error = validateEnvVars(draft)
+        if (error != null) {
+            _uiState.update {
+                it.copy(settingsPage = it.settingsPage.copy(envVarsError = error))
+            }
+            return
+        }
+        updateSettingsState(immediate = true) {
+            it.copy(
+                customEnvVars = draft.trim(),
+                isEnvVarsDialogOpen = false,
+                envVarsError = null,
+                statusNotice = "已保存自定义环境变量"
+            )
+        }
+    }
+
+    fun dismissEnvVarsDialog() {
+        _uiState.update {
+            it.copy(
+                settingsPage = it.settingsPage.copy(
+                    isEnvVarsDialogOpen = false,
+                    envVarsError = null
+                )
+            )
+        }
+    }
+
+    fun updatePythonDirFromSaf(uriString: String) {
+        val cleaned = uriString.trim()
+        if (cleaned.isEmpty()) return
+        updateSettingsState(immediate = true) { state ->
+            val nextOptions = (listOf(cleaned) + state.pythonDirOptions).distinct()
+            state.copy(
+                selectedPythonDir = cleaned,
+                pythonDirOptions = nextOptions,
+                statusNotice = "已选择 Python 目录：$cleaned"
+            )
+        }
+    }
+
+    fun triggerCleanTempFiles() {
+        _uiState.update {
+            it.copy(settingsPage = it.settingsPage.copy(statusNotice = "已清理临时文件（模拟操作）"))
+        }
+    }
+
+    fun triggerExportLogs() {
+        _uiState.update {
+            it.copy(settingsPage = it.settingsPage.copy(statusNotice = "已导出运行日志（模拟操作）"))
+        }
+    }
+
+    fun openDisclaimerDialog() {
+        _uiState.update { it.copy(settingsPage = it.settingsPage.copy(isDisclaimerDialogOpen = true)) }
+    }
+
+    fun dismissDisclaimerDialog() {
+        _uiState.update { it.copy(settingsPage = it.settingsPage.copy(isDisclaimerDialogOpen = false)) }
+    }
+
+    fun openLicensesDialog() {
+        _uiState.update { it.copy(settingsPage = it.settingsPage.copy(isLicensesDialogOpen = true)) }
+    }
+
+    fun dismissLicensesDialog() {
+        _uiState.update { it.copy(settingsPage = it.settingsPage.copy(isLicensesDialogOpen = false)) }
+    }
+
+    fun onVersionRowClick() {
+        val current = _uiState.value.settingsPage
+        if (current.isDevModeUnlocked) {
+            _uiState.update {
+                it.copy(settingsPage = it.settingsPage.copy(statusNotice = "开发者选项已处于解锁状态"))
+            }
+            return
+        }
+        val nextCount = current.versionTapCount + 1
+        if (nextCount >= 7) {
+            updateSettingsState(immediate = true) {
+                it.copy(
+                    versionTapCount = 7,
+                    isDevModeUnlocked = true,
+                    statusNotice = "已解锁开发者选项"
+                )
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    settingsPage = it.settingsPage.copy(
+                        versionTapCount = nextCount,
+                        statusNotice = if (nextCount >= 4) "再点击 ${7 - nextCount} 次解锁开发者选项" else null
+                    )
+                )
+            }
+        }
+    }
+
+    fun selectLogLevel(level: String) {
+        updateSettingsState(immediate = false) { it.copy(logLevel = level) }
+    }
+
+    fun toggleForceSoftwareRendering(enabled: Boolean) {
+        updateSettingsState(immediate = false) { it.copy(forceSoftwareRendering = enabled) }
+    }
+
+    private fun hydrateSettingsFromStore(data: SettingsData) {
+        _uiState.update { state ->
+            val nextDirOptions = if (data.selectedPythonDir.isNotBlank()) {
+                (listOf(data.selectedPythonDir) + state.settingsPage.pythonDirOptions).distinct()
+            } else {
+                state.settingsPage.pythonDirOptions
+            }
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    themeMode = data.themeMode,
+                    showHiddenFiles = data.showHiddenFiles,
+                    autoCheckUpdate = data.autoCheckUpdate,
+                    rootfsType = data.rootfsType,
+                    graphicsRenderer = data.graphicsRenderer,
+                    containerMountPath = data.containerMountPath,
+                    cpuCoreLimit = data.cpuCoreLimit,
+                    memLimitMB = data.memLimitMB,
+                    customEnvVars = data.customEnvVars,
+                    selectedPythonVersion = data.selectedPythonVersion,
+                    selectedPythonDir = data.selectedPythonDir,
+                    pythonDirOptions = nextDirOptions,
+                    logLevel = data.logLevel,
+                    isDevModeUnlocked = data.isDevModeUnlocked,
+                    forceSoftwareRendering = data.forceSoftwareRendering,
+                    versionName = data.versionName
+                )
+            )
+        }
+    }
+
+    private fun updateSettingsState(
+        immediate: Boolean,
+        transform: (SettingsPageState) -> SettingsPageState
+    ) {
+        _uiState.update { state ->
+            val nextPage = transform(state.settingsPage)
+            settingsManager?.update(immediate = immediate) { current ->
+                current.copy(
+                    themeMode = nextPage.themeMode,
+                    showHiddenFiles = nextPage.showHiddenFiles,
+                    autoCheckUpdate = nextPage.autoCheckUpdate,
+                    rootfsType = nextPage.rootfsType,
+                    graphicsRenderer = nextPage.graphicsRenderer,
+                    containerMountPath = nextPage.containerMountPath,
+                    cpuCoreLimit = nextPage.cpuCoreLimit,
+                    memLimitMB = nextPage.memLimitMB,
+                    customEnvVars = nextPage.customEnvVars,
+                    selectedPythonVersion = nextPage.selectedPythonVersion,
+                    selectedPythonDir = nextPage.selectedPythonDir,
+                    logLevel = nextPage.logLevel,
+                    isDevModeUnlocked = nextPage.isDevModeUnlocked,
+                    forceSoftwareRendering = nextPage.forceSoftwareRendering,
+                    versionName = nextPage.versionName
+                )
+            }
+            state.copy(settingsPage = nextPage)
         }
     }
 
