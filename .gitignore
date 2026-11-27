@@ -19,3 +19,6 @@ out/
 
 # Keystores
 *.keystore
+
+# Internal rules (untracked)
+PROJECT_RULES.md
