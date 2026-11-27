@@ -393,6 +393,7 @@ class MainViewModel @JvmOverloads constructor(
         }
         probeScope.launch {
             _uiState.update { state ->
+                if (state.folderPage.activeDialog !is FileManagerDialog.Rename) return@update state
                 val updated = state.folderPage.items.map { item ->
                     if (item.id == dialog.item.id) item.copy(name = newName) else item
                 }
@@ -424,6 +425,7 @@ class MainViewModel @JvmOverloads constructor(
         val targetIds = dialog.targets.map { it.id }.toSet()
         probeScope.launch {
             _uiState.update { state ->
+                if (state.folderPage.activeDialog !is FileManagerDialog.DeleteConfirm) return@update state
                 val remaining = state.folderPage.items.filterNot { it.id in targetIds }
                 state.copy(
                     folderPage = state.folderPage.copy(
@@ -530,6 +532,7 @@ class MainViewModel @JvmOverloads constructor(
             ?: dialog.permissions.toFourDigitOctal()
         probeScope.launch {
             _uiState.update { state ->
+                if (state.folderPage.activeDialog !is FileManagerDialog.PermissionEdit) return@update state
                 val updated = state.folderPage.items.map { item ->
                     if (item.id == dialog.item.id) {
                         item.copy(

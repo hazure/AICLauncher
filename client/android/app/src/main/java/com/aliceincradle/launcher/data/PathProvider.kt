@@ -27,8 +27,8 @@ class DefaultPathProvider(
 ) : PathProvider {
 
     override fun currentDirectoryLabel(context: Context?): String {
-        val detected = if (context != null) envDetector.detectAicDirectory(context) else null
-        return if (detected != null && detected.isDetected) {
+        val detected = envDetector.detectAicDirectory(context)
+        return if (detected.isDetected) {
             "${detected.displayPath}${File.separator}Mods"
         } else {
             DEFAULT_CURRENT_DIR
@@ -36,8 +36,8 @@ class DefaultPathProvider(
     }
 
     override fun targetDirectoryLabel(context: Context?): String {
-        val detected = if (context != null) envDetector.detectAicDirectory(context) else null
-        return if (detected != null && detected.isDetected) {
+        val detected = envDetector.detectAicDirectory(context)
+        return if (detected.isDetected) {
             detected.displayPath
         } else {
             DEFAULT_TARGET_DIR

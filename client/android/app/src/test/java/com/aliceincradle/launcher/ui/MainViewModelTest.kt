@@ -205,6 +205,22 @@ class MainViewModelTest {
     }
 
     @Test
+    fun pathProviderResolvesDynamicLabelsWithoutHardcodedStoragePaths() {
+        val gameDir = tempFolder.newFolder("aic_game_dir")
+        File(gameDir, "AliceInCradle.exe").writeText("stub")
+        val detector = EnvDetector(
+            procRoot = tempFolder.newFolder("empty_proc"),
+            allowBareCommandFallback = false,
+            envProvider = { mapOf("AIC_GAME_DIR" to gameDir.absolutePath) }
+        )
+        val provider = DefaultPathProvider(detector)
+        assertEquals("${gameDir.absolutePath}${File.separator}Mods", provider.currentDirectoryLabel(null))
+        assertEquals(gameDir.absolutePath, provider.targetDirectoryLabel(null))
+        assertTrue(provider.downloadExportTargets(null).isNotEmpty())
+        assertTrue(provider.buildItemPath("Mods", null).endsWith("Mods"))
+    }
+
+    @Test
     fun settingsPageExposesPythonDefaultsAndUpdatesCustomPath() {
         val vm = MainViewModel()
         val settings = vm.uiState.value.settingsPage

@@ -362,7 +362,7 @@ private fun FileComparisonRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 68.dp)
+            .heightIn(min = 76.dp)
             .clickable(onClick = onToggleSelection)
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag("folder_item_${item.id}"),
@@ -867,6 +867,7 @@ private fun PermissionEditDialog(
         confirmButton = {
             FilledIconButton(
                 onClick = onConfirm,
+                enabled = PosixPermissions.fromOctal(dialog.octalInput) != null,
                 modifier = Modifier.testTag("dialog_perm_confirm")
             ) {
                 Icon(imageVector = Icons.Default.Check, contentDescription = "应用权限")
@@ -979,6 +980,7 @@ private fun RenameFileDialog(
         confirmButton = {
             FilledIconButton(
                 onClick = onConfirm,
+                enabled = dialog.draftName.isNotBlank(),
                 modifier = Modifier.testTag("dialog_rename_confirm")
             ) {
                 Icon(imageVector = Icons.Default.Check, contentDescription = "确定")
