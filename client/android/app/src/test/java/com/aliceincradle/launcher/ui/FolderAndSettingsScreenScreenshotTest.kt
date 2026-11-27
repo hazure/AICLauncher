@@ -1,7 +1,5 @@
 package com.aliceincradle.launcher.ui
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.view.View
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -19,19 +17,19 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
 import kotlin.math.abs
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.ConscryptMode
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(AndroidJUnit4::class)
-@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@ConscryptMode(ConscryptMode.Mode.OFF)
+@GraphicsMode(GraphicsMode.Mode.LEGACY)
+@Config(shadows = [Arm64BitmapShadow::class, Arm64PaintShadow::class, Arm64CanvasShadow::class])
 class FolderAndSettingsScreenScreenshotTest {
 
     @get:Rule
@@ -44,7 +42,7 @@ class FolderAndSettingsScreenScreenshotTest {
         lateinit var hostView: View
 
         composeTestRule.setContent {
-            hostView = LocalView.current
+            hostView = configureSoftwareHostView(LocalView.current)
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainScreen(viewModel = viewModel)
@@ -83,7 +81,7 @@ class FolderAndSettingsScreenScreenshotTest {
             .boundsInRoot
             .top
 
-        captureHostBitmap(hostView, "folder_360dp.png")
+        captureSoftwareScreenshot(hostView, "folder_360dp.png")
 
         composeTestRule.onNodeWithTag("folder_left_lazy_column").performScrollToIndex(8)
         composeTestRule.waitForIdle()
@@ -129,7 +127,7 @@ class FolderAndSettingsScreenScreenshotTest {
         composeTestRule.onNodeWithTag("dialog_perm_cancel").performClick()
         composeTestRule.waitForIdle()
 
-        captureHostBitmap(hostView, "folder_360dp_scrolled.png")
+        captureSoftwareScreenshot(hostView, "folder_360dp_scrolled.png")
     }
 
     @Test
@@ -139,7 +137,7 @@ class FolderAndSettingsScreenScreenshotTest {
         lateinit var hostView: View
 
         composeTestRule.setContent {
-            hostView = LocalView.current
+            hostView = configureSoftwareHostView(LocalView.current)
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainScreen(viewModel = viewModel)
@@ -154,7 +152,7 @@ class FolderAndSettingsScreenScreenshotTest {
         assertFolderElementsDisplayed(hostView)
         composeTestRule.onNodeWithTag("left_scrollbar_thumb").assertIsDisplayed()
         composeTestRule.onNodeWithTag("right_scrollbar_thumb").assertIsDisplayed()
-        captureHostBitmap(hostView, "folder_412dp.png")
+        captureSoftwareScreenshot(hostView, "folder_412dp.png")
     }
 
     @Test
@@ -164,7 +162,7 @@ class FolderAndSettingsScreenScreenshotTest {
         lateinit var hostView: View
 
         composeTestRule.setContent {
-            hostView = LocalView.current
+            hostView = configureSoftwareHostView(LocalView.current)
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainScreen(viewModel = viewModel)
@@ -177,7 +175,7 @@ class FolderAndSettingsScreenScreenshotTest {
         composeTestRule.waitForIdle()
 
         assertSettingsElementsDisplayed(hostView)
-        captureHostBitmap(hostView, "settings_360dp.png")
+        captureSoftwareScreenshot(hostView, "settings_360dp.png")
 
         composeTestRule.onNodeWithTag("settings_custom_path_button").performClick()
         composeTestRule.waitForIdle()
@@ -196,7 +194,7 @@ class FolderAndSettingsScreenScreenshotTest {
         lateinit var hostView: View
 
         composeTestRule.setContent {
-            hostView = LocalView.current
+            hostView = configureSoftwareHostView(LocalView.current)
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainScreen(viewModel = viewModel)
@@ -209,7 +207,7 @@ class FolderAndSettingsScreenScreenshotTest {
         composeTestRule.waitForIdle()
 
         assertSettingsElementsDisplayed(hostView)
-        captureHostBitmap(hostView, "settings_412dp.png")
+        captureSoftwareScreenshot(hostView, "settings_412dp.png")
     }
 
     private fun assertFolderElementsDisplayed(hostView: View) {
@@ -270,36 +268,5 @@ class FolderAndSettingsScreenScreenshotTest {
             "Settings dropdown must stay within host width (${hostView.width}): $menuBounds",
             menuBounds.right <= hostView.width.toFloat() + 1f
         )
-    }
-
-    private fun captureHostBitmap(hostView: View, fileName: String) {
-        assertTrue("Host view width must be positive", hostView.width > 0)
-        assertTrue("Host view height must be positive", hostView.height > 0)
-
-        val bitmap = Bitmap.createBitmap(hostView.width, hostView.height, Bitmap.Config.ARGB_8888)
-        hostView.draw(Canvas(bitmap))
-
-        val firstPixel = bitmap.getPixel(0, 0)
-        var hasDistinctPixel = false
-        for (y in 0 until bitmap.height step 16) {
-            for (x in 0 until bitmap.width step 16) {
-                if (bitmap.getPixel(x, y) != firstPixel) {
-                    hasDistinctPixel = true
-                    break
-                }
-            }
-            if (hasDistinctPixel) break
-        }
-        assertTrue("Captured screenshot must not be blank", hasDistinctPixel)
-
-        val outDir = File("build/reports/screenshots")
-        if (!outDir.exists() && !outDir.mkdirs()) {
-            throw IOException("Failed to create screenshot directory: ${outDir.absolutePath}")
-        }
-        val outFile = File(outDir, fileName)
-        FileOutputStream(outFile).use { stream ->
-            val saved = bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-            assertTrue("Failed to save PNG screenshot: ${outFile.absolutePath}", saved)
-        }
     }
 }
