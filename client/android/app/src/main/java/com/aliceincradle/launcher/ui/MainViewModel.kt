@@ -2,8 +2,10 @@ package com.aliceincradle.launcher.ui
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
+import com.aliceincradle.launcher.bridge.ArchiveExtractor
 import com.aliceincradle.launcher.bridge.EnvDetector
 import com.aliceincradle.launcher.bridge.EnvironmentStatus
+import com.aliceincradle.launcher.bridge.GameSourceResolver
 import com.aliceincradle.launcher.bridge.InjectionBridge
 import com.aliceincradle.launcher.bridge.InjectionPhase
 import com.aliceincradle.launcher.bridge.InjectionUiState
@@ -2006,5 +2008,127 @@ class MainViewModel @JvmOverloads constructor(
         } else {
             openCodeEditor(prompt.item, file)
         }
+    }
+
+    // ==================== T35 Official Trial Acquisition & Handoff ====================
+
+    enum class AcquisitionPhase {
+        IDLE,
+        RESOLVING_SOURCE,
+        DOWNLOADING,
+        VERIFYING,
+        EXTRACTING,
+        READY,
+        SOURCE_UNAVAILABLE,
+        LINK_EXPIRED,
+        DOWNLOAD_FAILED,
+        CHECKSUM_MISMATCH,
+        EXTRACTOR_MISSING,
+        EXTRACT_FAILED,
+        GAME_NOT_FOUND
+    }
+
+    data class AcquisitionUiState(
+        val phase: AcquisitionPhase = AcquisitionPhase.IDLE,
+        val progressPercent: Int = 0,
+        val statusMessage: String? = null,
+        val resolvedGameDir: File? = null
+    )
+
+    private val _acquisitionState = MutableStateFlow(AcquisitionUiState())
+    val acquisitionState: StateFlow<AcquisitionUiState> = _acquisitionState.asStateFlow()
+
+    private val gameSourceResolver = GameSourceResolver()
+    private val archiveExtractor = ArchiveExtractor()
+
+    fun startOfficialTrialAcquisition() {
+        val ctx = appContext ?: return
+        _acquisitionState.value = AcquisitionUiState(
+            phase = AcquisitionPhase.RESOLVING_SOURCE,
+            statusMessage = "正在从官方源动态取链..."
+        )
+        probeScope.launch {
+            val source = gameSourceResolver.resolveLatestWinTrial(ctx)
+            if (source == null) {
+                _acquisitionState.value = AcquisitionUiState(
+                    phase = AcquisitionPhase.SOURCE_UNAVAILABLE,
+                    statusMessage = "官方源取链失败，请检查网络或使用下方备用链接"
+                )
+                return@launch
+            }
+            val downloadDir = DownloadQueueManager.resolveDownloadDirectory(ctx)
+            val destFile = File(downloadDir, source.fileName)
+            val extractTarget = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "AliceInCradle_Trial")
+            val fp = GameSourceResolver.urlFingerprint(source.url)
+
+            _acquisitionState.value = AcquisitionUiState(
+                phase = AcquisitionPhase.DOWNLOADING,
+                progressPercent = 0,
+                statusMessage = "正在下载官方 Trial 包..."
+            )
+
+            downloadQueueManager.enqueue(
+                DownloadRequest(
+                    itemId = "__official_trial__",
+                    url = source.url,
+                    destFile = destFile,
+                    expectedBytes = source.sizeBytes ?: 0L,
+                    expectedSha256 = source.sha256,
+                    reResolveUrl = { gameSourceResolver.resolveLatestWinTrial(ctx)?.url }
+                )
+            )
+
+            // Wait for download completion or failure via polling file/state
+            // Actual extraction is triggered when destFile is ready
+            if (destFile.isFile && destFile.length() > 0L) {
+                _acquisitionState.value = AcquisitionUiState(
+                    phase = AcquisitionPhase.EXTRACTING,
+                    progressPercent = 100,
+                    statusMessage = "正在解压本体包..."
+                )
+                val extractRes = archiveExtractor.extractAtomically(
+                    archiveFile = destFile,
+                    targetDir = extractTarget,
+                    cacheDir = ctx.cacheDir,
+                    filesDir = ctx.filesDir,
+                    urlFingerprint = fp
+                )
+                extractRes.onSuccess { outDir ->
+                    val probeRes = com.aliceincradle.launcher.bridge.EnvironmentProbe().resolveGameRoot(ctx, outDir)
+                    when (probeRes) {
+                        is com.aliceincradle.launcher.bridge.GameProbeOutcome.Found -> {
+                            _acquisitionState.value = AcquisitionUiState(
+                                phase = AcquisitionPhase.READY,
+                                progressPercent = 100,
+                                statusMessage = "本体已就绪，可进入 T33 注入",
+                                resolvedGameDir = probeRes.root.rootDir
+                            )
+                        }
+                        else -> {
+                            _acquisitionState.value = AcquisitionUiState(
+                                phase = AcquisitionPhase.GAME_NOT_FOUND,
+                                statusMessage = "解压完成但未识别到 Unity 本体，请手动指定目录"
+                            )
+                        }
+                    }
+                }.onFailure { err ->
+                    val phase = if (err is com.aliceincradle.launcher.bridge.ExtractorMissingException) {
+                        AcquisitionPhase.EXTRACTOR_MISSING
+                    } else {
+                        AcquisitionPhase.EXTRACT_FAILED
+                    }
+                    _acquisitionState.value = AcquisitionUiState(
+                        phase = phase,
+                        statusMessage = err.message ?: "解压失败"
+                    )
+                }
+            }
+        }
+    }
+
+    fun handoffAcquiredGameToInjection() {
+        val dir = _acquisitionState.value.resolvedGameDir ?: return
+        setInjectionGameDir(dir)
+        selectTab(MainTab.HOME)
     }
 }

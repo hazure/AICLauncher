@@ -50,3 +50,5 @@ AIC 的 Mod 加载及补丁支持已迁移至独立项目 AICP。
 ## 致谢
 
 - 图标设计参考与基线：[Material Symbols](https://github.com/google/material-design-icons)（Apache-2.0）与 [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme)（MIT），完整许可与来源声明见 [LICENSES/NOTICE](LICENSES/NOTICE)。
+
+- 官方 Trial 版资源说明：AICL 运行时仅从官方源（`https://get.aliceincradle.dev/win/`）动态获取 Trial 版信息，绝不捆绑或镜像分发游戏本体；游戏本体版权及 [License Terms](https://docs.nanamehacha.dev/en/aliceincradle/license) 归 `NanameHacha@Cicini` 所有。

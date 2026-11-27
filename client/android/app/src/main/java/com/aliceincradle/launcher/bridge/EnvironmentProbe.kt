@@ -186,6 +186,24 @@ class EnvironmentProbe(
         return results
     }
 
+    fun resolveSevenZipExecutable(): File? {
+        val env = envProvider()
+        env["AIC_7Z_PATH"]?.takeIf { it.isNotBlank() }?.let { raw ->
+            val f = File(raw)
+            if (f.isFile && f.canExecute()) return f
+        }
+        val candidateDirs = linkedSetOf<String>()
+        env["PREFIX"]?.takeIf { it.isNotBlank() }?.let { candidateDirs += "$it${File.separator}bin" }
+        env["PATH"]?.split(File.pathSeparator)?.filter { it.isNotBlank() }?.let { candidateDirs.addAll(it) }
+        for (dir in candidateDirs) {
+            for (name in listOf("7z", "7zz", "7za")) {
+                val f = File(dir, name)
+                if (f.isFile && f.canExecute()) return f
+            }
+        }
+        return null
+    }
+
     private fun inspectCandidateTree(dir: File, maxDepth: Int): GameProbeOutcome {
         return try {
             if (!dir.exists() || !dir.isDirectory) return GameProbeOutcome.NotFound

@@ -2,12 +2,19 @@ package com.aliceincradle.launcher.data
 
 import android.content.Context
 import android.os.Environment
+import android.util.Log
+import com.aliceincradle.launcher.bridge.ArchiveContainer
+import com.aliceincradle.launcher.bridge.ArchiveExtractor
+import com.aliceincradle.launcher.bridge.GameSourceResolver
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
+import java.security.MessageDigest
+import kotlinx.coroutines.delay
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
@@ -153,7 +160,9 @@ data class DownloadRequest(
     val itemId: String,
     val url: String,
     val destFile: File,
-    val expectedBytes: Long = 0L
+    val expectedBytes: Long = 0L,
+    val expectedSha256: String? = null,
+    val reResolveUrl: (suspend () -> String?)? = null
 )
 
 interface DownloadProgressListener {
@@ -263,62 +272,162 @@ class DownloadQueueManager(
                 throw IOException("无法创建下载目录：${parent.absolutePath}")
             }
             val partFile = File(parent, "${request.destFile.name}.part")
-            val conn = (URL(request.url).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 15_000
-                readTimeout = 20_000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", CHROME_USER_AGENT)
-            }
-            try {
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    throw IOException("HTTP $code")
-                }
-                val totalBytes = conn.contentLengthLong.takeIf { it > 0L } ?: request.expectedBytes
-                val buffer = ByteArray(BUFFER_SIZE)
-                var downloaded = 0L
-                var lastEmitTime = 0L
+            var currentUrl = request.url
+            var reResolvedOnce = false
+            var transientAttempt = 0
 
-                conn.inputStream.use { input ->
-                    FileOutputStream(partFile).use { output ->
-                        while (true) {
-                            coroutineContext.ensureActive()
-                            val read = input.read(buffer)
-                            if (read <= 0) break
-                            output.write(buffer, 0, read)
-                            downloaded += read
-                            val now = System.currentTimeMillis()
-                            if (now - lastEmitTime >= PROGRESS_EMIT_INTERVAL_MS) {
-                                lastEmitTime = now
-                                val percent = if (totalBytes > 0L) {
-                                    ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99)
-                                } else {
-                                    0
-                                }
-                                listener.onProgress(request.itemId, downloaded, totalBytes, percent)
-                            }
-                        }
+            while (true) {
+                coroutineContext.ensureActive()
+                val existingBytes = if (partFile.isFile) partFile.length() else 0L
+                val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 15_000
+                    readTimeout = 20_000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", CHROME_USER_AGENT)
+                    if (existingBytes > 0L) {
+                        setRequestProperty("Range", "bytes=$existingBytes-")
                     }
                 }
+                try {
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        val isResume = code == HttpURLConnection.HTTP_PARTIAL && existingBytes > 0L
+                        val contentLen = conn.contentLengthLong.takeIf { it > 0L } ?: 0L
+                        val totalBytes = if (isResume && contentLen > 0L) {
+                            existingBytes + contentLen
+                        } else if (contentLen > 0L) {
+                            contentLen
+                        } else {
+                            request.expectedBytes
+                        }
+                        val buffer = ByteArray(BUFFER_SIZE)
+                        var downloaded = if (isResume) existingBytes else 0L
+                        var lastEmitTime = 0L
 
-                if (request.destFile.exists()) {
-                    request.destFile.delete()
+                        conn.inputStream.use { input ->
+                            FileOutputStream(partFile, isResume).use { output ->
+                                while (true) {
+                                    coroutineContext.ensureActive()
+                                    val read = input.read(buffer)
+                                    if (read <= 0) break
+                                    output.write(buffer, 0, read)
+                                    downloaded += read
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastEmitTime >= PROGRESS_EMIT_INTERVAL_MS) {
+                                        lastEmitTime = now
+                                        val percent = if (totalBytes > 0L) {
+                                            ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99)
+                                        } else {
+                                            0
+                                        }
+                                        listener.onProgress(request.itemId, downloaded, totalBytes, percent)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Integrity check (D5): strong sha256 if provided, else size + magic check
+                        val expectedSha = request.expectedSha256
+                        if (!expectedSha.isNullOrBlank()) {
+                            val actualSha = computeSha256(partFile)
+                            if (!actualSha.equals(expectedSha, ignoreCase = true)) {
+                                partFile.delete()
+                                throw IOException("CHECKSUM_MISMATCH: 文件哈希校验失败")
+                            }
+                        } else {
+                            val container = ArchiveExtractor().detectContainer(partFile)
+                            runCatching {
+                                Log.i(
+                                    "AICL_PIPELINE",
+                                    "VERIFYING ok (上游未提供哈希声明, container=$container, bytes=${partFile.length()}, fp=${GameSourceResolver.urlFingerprint(currentUrl)})"
+                                )
+                            }
+                            if (container == ArchiveContainer.UNKNOWN && partFile.length() == 0L) {
+                                partFile.delete()
+                                throw IOException("CHECKSUM_MISMATCH: 下载产物为空")
+                            }
+                        }
+
+                        if (request.destFile.exists()) {
+                            request.destFile.delete()
+                        }
+                        if (!partFile.renameTo(request.destFile)) {
+                            partFile.copyTo(request.destFile, overwrite = true)
+                            partFile.delete()
+                        }
+                        listener.onProgress(request.itemId, downloaded, totalBytes.coerceAtLeast(downloaded), 100)
+                        listener.onCompleted(request.itemId, request.destFile)
+                        return
+                    }
+
+                    when (HttpErrorPolicy.classifyHttpCode(code)) {
+                        HttpErrorAction.RE_RESOLVE_LINK -> {
+                            runCatching {
+                                Log.i("AICL_PIPELINE", "DOWNLOADING http=$code action=RE_RESOLVE_LINK fp=${GameSourceResolver.urlFingerprint(currentUrl)}")
+                            }
+                            if (!reResolvedOnce && request.reResolveUrl != null) {
+                                reResolvedOnce = true
+                                val refreshed = request.reResolveUrl.invoke()
+                                if (!refreshed.isNullOrBlank()) {
+                                    currentUrl = refreshed
+                                    continue
+                                }
+                            }
+                            throw IOException("LINK_EXPIRED: HTTP $code")
+                        }
+                        HttpErrorAction.RETRY_WITH_BACKOFF -> {
+                            if (transientAttempt < HttpErrorPolicy.MAX_TRANSIENT_RETRIES) {
+                                val delayMs = HttpErrorPolicy.BACKOFF_DELAYS_MS.getOrElse(transientAttempt) { 4_000L }
+                                transientAttempt++
+                                delay(delayMs)
+                                continue
+                            }
+                            throw IOException("DOWNLOAD_FAILED: HTTP $code")
+                        }
+                        HttpErrorAction.FAIL_FAST -> {
+                            throw IOException("DOWNLOAD_FAILED: HTTP $code")
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    if (partFile.exists()) partFile.delete()
+                    throw e
+                } catch (e: IOException) {
+                    if (e.message?.startsWith("LINK_EXPIRED") == true ||
+                        e.message?.startsWith("CHECKSUM_MISMATCH") == true ||
+                        e.message?.startsWith("DOWNLOAD_FAILED") == true
+                    ) {
+                        if (partFile.exists() && e.message?.startsWith("CHECKSUM_MISMATCH") == true) {
+                            partFile.delete()
+                        }
+                        throw e
+                    }
+                    if (HttpErrorPolicy.classifyException(e) == HttpErrorAction.RETRY_WITH_BACKOFF &&
+                        transientAttempt < HttpErrorPolicy.MAX_TRANSIENT_RETRIES
+                    ) {
+                        val delayMs = HttpErrorPolicy.BACKOFF_DELAYS_MS.getOrElse(transientAttempt) { 4_000L }
+                        transientAttempt++
+                        delay(delayMs)
+                        continue
+                    }
+                    throw e
+                } finally {
+                    conn.disconnect()
                 }
-                if (!partFile.renameTo(request.destFile)) {
-                    partFile.copyTo(request.destFile, overwrite = true)
-                    partFile.delete()
-                }
-                listener.onProgress(request.itemId, downloaded, totalBytes.coerceAtLeast(downloaded), 100)
-                listener.onCompleted(request.itemId, request.destFile)
-            } catch (e: Exception) {
-                if (partFile.exists()) {
-                    partFile.delete()
-                }
-                throw e
-            } finally {
-                conn.disconnect()
             }
+        }
+
+        private fun computeSha256(file: File): String {
+            val md = MessageDigest.getInstance("SHA-256")
+            val buf = ByteArray(16 * 1024)
+            FileInputStream(file).use { input ->
+                while (true) {
+                    val read = input.read(buf)
+                    if (read <= 0) break
+                    md.update(buf, 0, read)
+                }
+            }
+            return md.digest().joinToString("") { "%02x".format(it) }
         }
     }
 }

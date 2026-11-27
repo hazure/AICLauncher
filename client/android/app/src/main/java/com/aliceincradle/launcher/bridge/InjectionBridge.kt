@@ -278,7 +278,7 @@ class InjectionBridge(
                             val rel = entry.name.trimStart('/')
                             if (rel.isNotEmpty()) {
                                 val outFile = File(targetRoot, rel).canonicalFile
-                                if (!outFile.path.startsWith(rootCanonical.path + File.separator)) {
+                                if (!isPathInsideRoot(rootCanonical, outFile)) {
                                     return rollbackAll("检测到非法压缩包路径：$rel")
                                 }
                                 if (isProtectedGameFile(rel)) {
@@ -466,8 +466,14 @@ class InjectionBridge(
     }
 
     companion object {
-        private const val TAG = "InjectionBridge"
+        private const val TAG = "AICL_PIPELINE"
         const val CHECKPOINT_FILE_NAME = ".aicl_inject_checkpoint"
         const val REPORT_FILE_NAME = "inject_report.json"
+
+        fun isPathInsideRoot(rootCanonical: File, targetFile: File): Boolean {
+            val targetCanonical = runCatching { targetFile.canonicalFile }.getOrElse { return false }
+            return targetCanonical.path.startsWith(rootCanonical.path + File.separator) ||
+                targetCanonical.path == rootCanonical.path
+        }
     }
 }

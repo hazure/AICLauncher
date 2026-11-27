@@ -746,8 +746,9 @@ fun SettingsScreen(
             title = { Text(text = "开源协议") },
             text = {
                 Text(
-                    text = "AICL 基于 Jetpack Compose 与 Material 3 构建；" +
-                        "不包含任何受版权保护的游戏本体或官方二进制资产。"
+                    text = "AICL 基于 Jetpack Compose 与 Material 3 构建（MIT License）。" +
+                        "运行时仅从官方源动态获取 Trial 版资源，绝不捆绑或镜像分发游戏本体；" +
+                        "《Alice In Cradle》版权及 License Terms 归 NanameHacha@Cicini 所有。"
                 )
             },
             confirmButton = {
