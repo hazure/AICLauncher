@@ -6,8 +6,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
@@ -37,30 +39,17 @@ class TelemetryLayoutScreenshotTest {
     @Test
     @Config(sdk = [34], qualifiers = "w360dp-h780dp-xhdpi")
     fun narrowScreen360dpRendersEqualCircularGauges() {
-        verifyCircularGaugesAndCapture(
-            fileName = "telemetry_360dp.png",
-            simulateRunning = true
-        )
+        verifyCircularGaugesAndCapture(fileName = "telemetry_360dp.png")
     }
 
     @Test
     @Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
     fun standardScreen412dpRendersEqualCircularGauges() {
-        verifyCircularGaugesAndCapture(
-            fileName = "telemetry_412dp.png",
-            simulateRunning = false
-        )
+        verifyCircularGaugesAndCapture(fileName = "telemetry_412dp.png")
     }
 
-    private fun verifyCircularGaugesAndCapture(
-        fileName: String,
-        simulateRunning: Boolean
-    ) {
+    private fun verifyCircularGaugesAndCapture(fileName: String) {
         val viewModel = createScreenshotViewModel()
-        if (simulateRunning) {
-            viewModel.launchGame()
-            viewModel.toggleSampleDownloads()
-        }
 
         lateinit var hostView: View
         composeTestRule.setContent {
@@ -90,6 +79,10 @@ class TelemetryLayoutScreenshotTest {
         assertEquals("GPU ring width must equal CPU ring width", cpuBounds.width, gpuBounds.width, 1f)
         assertEquals("GPU ring width must equal Memory ring width", memBounds.width, gpuBounds.width, 1f)
         assertEquals("GPU ring height must equal CPU ring height", cpuBounds.height, gpuBounds.height, 1f)
+
+        composeTestRule.onNodeWithTag("home_play_fab").assertIsDisplayed()
+        composeTestRule.onNodeWithText("下载队列调试").assertDoesNotExist()
+        composeTestRule.onNodeWithText("模拟返回退出").assertDoesNotExist()
 
         captureSoftwareScreenshot(hostView, fileName)
     }

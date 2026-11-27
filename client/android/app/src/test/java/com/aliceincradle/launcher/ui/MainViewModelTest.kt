@@ -3,12 +3,9 @@ package com.aliceincradle.launcher.ui
 import com.aliceincradle.launcher.bridge.EnvDetector
 import com.aliceincradle.launcher.data.DefaultPathProvider
 import com.aliceincradle.launcher.data.DownloadContentStatus
-import com.aliceincradle.launcher.data.DownloadTaskItem
 import com.aliceincradle.launcher.data.FileManagerDialog
 import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderEntryType
-import com.aliceincradle.launcher.data.GameProcessState
-import com.aliceincradle.launcher.data.GameRunStatus
 import com.aliceincradle.launcher.data.PosixPermissions
 import com.aliceincradle.launcher.data.SystemTelemetryProvider
 import java.io.File
@@ -25,60 +22,6 @@ import org.junit.rules.TemporaryFolder
 class MainViewModelTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
-
-    @Test
-    fun initialStateShowsLaunchButtonAndHidesStatusCardAndDownloadButton() {
-        val vm = MainViewModel()
-        val state = vm.uiState.value
-
-        assertFalse(state.gameProcess.isAlive)
-        assertTrue(state.fabVisibility.showLaunch)
-        assertFalse(state.fabVisibility.showTerminate)
-        assertFalse(state.fabVisibility.showDownloads)
-        assertTrue(state.fabVisibility.isContainerVisible)
-    }
-
-    @Test
-    fun launchAndTerminateTogglesGameStatusCardAndFabs() {
-        val vm = MainViewModel()
-
-        vm.launchGame()
-        var state = vm.uiState.value
-        assertTrue(state.gameProcess.isAlive)
-        assertFalse(state.fabVisibility.showLaunch)
-        assertTrue(state.fabVisibility.showTerminate)
-
-        vm.terminateGame()
-        state = vm.uiState.value
-        assertEquals(GameRunStatus.TERMINATED, state.gameProcess.status)
-        assertFalse(state.gameProcess.isAlive)
-        assertTrue(state.fabVisibility.showLaunch)
-        assertFalse(state.fabVisibility.showTerminate)
-    }
-
-    @Test
-    fun normalExitHidesGameStatusCard() {
-        val vm = MainViewModel()
-        vm.updateGameProcess(GameProcessState(status = GameRunStatus.RUNNING, pid = 1234))
-        assertTrue(vm.uiState.value.gameProcess.isAlive)
-
-        vm.exitGameNormally()
-        assertFalse(vm.uiState.value.gameProcess.isAlive)
-        assertEquals(GameRunStatus.STOPPED, vm.uiState.value.gameProcess.status)
-    }
-
-    @Test
-    fun downloadButtonAndContainerVisibilityFollowState() {
-        val vm = MainViewModel()
-        vm.updateDownloads(listOf(DownloadTaskItem("1", "Turnip", 50)))
-        assertTrue(vm.uiState.value.fabVisibility.showDownloads)
-
-        vm.updateDownloads(emptyList())
-        assertFalse(vm.uiState.value.fabVisibility.showDownloads)
-
-        vm.setCanLaunchGame(false)
-        assertFalse(vm.uiState.value.fabVisibility.isContainerVisible)
-    }
 
     @Test
     fun telemetryDialogsOpenAndDismissCorrectly() {
@@ -264,7 +207,7 @@ class MainViewModelTest {
     }
 
     @Test
-    fun refreshTelemetryAndEnvDrivesRealStateAndRespectsSimulatedProcess() = runBlocking {
+    fun refreshTelemetryAndEnvDrivesRealState() = runBlocking {
         val proc = tempFolder.newFolder("proc_vm")
         val sys = tempFolder.newFolder("sys_vm")
         File(proc, "meminfo").writeText(
@@ -295,19 +238,5 @@ class MainViewModelTest {
         assertEquals(0.75f, refreshed.telemetry.memory.usagePercent, 0.01f)
         assertEquals(51, refreshed.telemetry.thermal.headlineTempC)
         assertEquals(EnvDetector.MISSING_PYTHON_LABEL, refreshed.deviceInfo.pythonVersion)
-        assertFalse(refreshed.gameProcess.isAlive)
-
-        // Simulated launch must not be overridden when external procfs shows no game process.
-        vm.launchGame()
-        assertTrue(vm.uiState.value.gameProcess.isAlive)
-        vm.refreshTelemetryAndEnv(includeEnv = false)
-        assertTrue(vm.uiState.value.gameProcess.isAlive)
-
-        // Real detected game process takes precedence.
-        val pidDir = File(proc, "9876").apply { mkdirs() }
-        File(pidDir, "cmdline").writeText("AliceInCradle.exe")
-        vm.refreshTelemetryAndEnv(includeEnv = false)
-        assertTrue(vm.uiState.value.gameProcess.isAlive)
-        assertEquals(9876, vm.uiState.value.gameProcess.pid)
     }
 }

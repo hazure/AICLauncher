@@ -11,13 +11,10 @@ import com.aliceincradle.launcher.data.DownloadCatalogPreviewFactory
 import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadFilterState
 import com.aliceincradle.launcher.data.DownloadPageState
-import com.aliceincradle.launcher.data.DownloadTaskItem
 import com.aliceincradle.launcher.data.FileItem
 import com.aliceincradle.launcher.data.FileManagerDialog
 import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderPageState
-import com.aliceincradle.launcher.data.GameProcessState
-import com.aliceincradle.launcher.data.GameRunStatus
 import com.aliceincradle.launcher.data.PathProvider
 import com.aliceincradle.launcher.data.PosixPermissions
 import com.aliceincradle.launcher.data.SettingsPageState
@@ -55,36 +52,16 @@ enum class TelemetryDialogType {
     THERMAL
 }
 
-data class FabGroupVisibility(
-    val showLaunch: Boolean,
-    val showTerminate: Boolean,
-    val showDownloads: Boolean
-) {
-    val isContainerVisible: Boolean
-        get() = showLaunch || showTerminate || showDownloads
-}
-
 data class MainUiState(
     val isLoading: Boolean = true,
     val deviceInfo: DeviceInfo = DeviceInfo(),
     val telemetry: SystemTelemetry = TelemetryPreviewFactory.createPreview(),
-    val gameProcess: GameProcessState = GameProcessState(),
-    val downloadTasks: List<DownloadTaskItem> = emptyList(),
     val activeDialog: TelemetryDialogType = TelemetryDialogType.NONE,
-    val isDownloadSheetOpen: Boolean = false,
-    val canLaunchGame: Boolean = true,
     val selectedTab: MainTab = MainTab.HOME,
     val downloadPage: DownloadPageState = DownloadPageState(),
     val folderPage: FolderPageState = FolderPageState(),
     val settingsPage: SettingsPageState = SettingsPageState()
-) {
-    val fabVisibility: FabGroupVisibility
-        get() = FabGroupVisibility(
-            showLaunch = canLaunchGame && !gameProcess.isAlive,
-            showTerminate = gameProcess.isAlive,
-            showDownloads = downloadTasks.isNotEmpty()
-        )
-}
+)
 
 class MainViewModel @JvmOverloads constructor(
     private val telemetryProvider: SystemTelemetryProvider = SystemTelemetryProvider(),
@@ -101,7 +78,6 @@ class MainViewModel @JvmOverloads constructor(
     @Volatile
     private var appContext: Context? = null
     private var hasLoadedContext = false
-    private var nextSimulatedPid = 10482
     private val probeScope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val refreshMutex = Mutex()
     private var fileOpJob: Job? = null
@@ -131,7 +107,6 @@ class MainViewModel @JvmOverloads constructor(
         refreshMutex.withLock {
             val ctx = appContext
             val sampledTelemetry = telemetryProvider.sample(ctx)
-            val detectedProcess = envDetector.probeGameProcess()
             val updatedDeviceInfo = if (includeEnv) {
                 DeviceInfoProvider.load(
                     context = ctx,
@@ -150,11 +125,6 @@ class MainViewModel @JvmOverloads constructor(
                     gpu = sampledTelemetry.gpu.renderer,
                     memory = DeviceInfoProvider.formatMemorySummary(sampledTelemetry.memory)
                 )
-                val nextProcess = when {
-                    detectedProcess.isAlive -> detectedProcess
-                    state.gameProcess.isSimulated -> state.gameProcess
-                    else -> detectedProcess
-                }
                 val nextFolderPage = if (currentDir != null && targetDir != null) {
                     state.folderPage.copy(currentPath = currentDir, targetPath = targetDir)
                 } else {
@@ -164,7 +134,6 @@ class MainViewModel @JvmOverloads constructor(
                     isLoading = false,
                     deviceInfo = nextInfo,
                     telemetry = sampledTelemetry,
-                    gameProcess = nextProcess,
                     folderPage = nextFolderPage
                 )
             }
@@ -188,92 +157,11 @@ class MainViewModel @JvmOverloads constructor(
         _uiState.update { it.copy(activeDialog = TelemetryDialogType.NONE) }
     }
 
-    fun openDownloadSheet() {
-        _uiState.update { it.copy(isDownloadSheetOpen = true) }
-    }
-
-    fun dismissDownloadSheet() {
-        _uiState.update { it.copy(isDownloadSheetOpen = false) }
-    }
-
     /**
      * Reserved interface for feeding real telemetry samples from native/bridge probes.
      */
     fun updateTelemetry(telemetry: SystemTelemetry) {
         _uiState.update { it.copy(telemetry = telemetry) }
-    }
-
-    /**
-     * Reserved interface for syncing real process monitor state.
-     */
-    fun updateGameProcess(processState: GameProcessState) {
-        _uiState.update { state ->
-            state.copy(gameProcess = processState)
-        }
-    }
-
-    /**
-     * Reserved interface for syncing real download queue state.
-     */
-    fun updateDownloads(tasks: List<DownloadTaskItem>) {
-        _uiState.update { state ->
-            state.copy(
-                downloadTasks = tasks,
-                isDownloadSheetOpen = if (tasks.isEmpty()) false else state.isDownloadSheetOpen
-            )
-        }
-    }
-
-    fun launchGame() {
-        val pid = nextSimulatedPid++
-        updateGameProcess(
-            GameProcessState(
-                status = GameRunStatus.RUNNING,
-                versionName = "AIC 0.3.0",
-                pid = pid,
-                isSimulated = true
-            )
-        )
-    }
-
-    fun terminateGame() {
-        updateGameProcess(
-            GameProcessState(
-                status = GameRunStatus.TERMINATED,
-                versionName = "AIC 0.3.0",
-                pid = null,
-                isSimulated = false
-            )
-        )
-    }
-
-    fun exitGameNormally() {
-        updateGameProcess(
-            GameProcessState(
-                status = GameRunStatus.STOPPED,
-                versionName = "AIC 0.3.0",
-                pid = null,
-                isSimulated = false
-            )
-        )
-    }
-
-    fun setCanLaunchGame(canLaunch: Boolean) {
-        _uiState.update { it.copy(canLaunchGame = canLaunch) }
-    }
-
-    fun toggleSampleDownloads() {
-        val current = _uiState.value.downloadTasks
-        if (current.isEmpty()) {
-            updateDownloads(
-                listOf(
-                    DownloadTaskItem("dl-1", "Turnip v24.1.0 驱动包", 64),
-                    DownloadTaskItem("dl-2", "DXVK 2.3.1 兼容层组件", 28)
-                )
-            )
-        } else {
-            updateDownloads(emptyList())
-        }
     }
 
     fun updateDownloadQuery(query: String) {
@@ -312,13 +200,7 @@ class MainViewModel @JvmOverloads constructor(
                     item
                 }
             }
-            val nextTasks = if (state.downloadTasks.any { it.id == itemId } || target.status == DownloadContentStatus.DOWNLOADED) {
-                state.downloadTasks
-            } else {
-                state.downloadTasks + DownloadTaskItem(id = target.id, name = target.title, progressPercent = 15)
-            }
             state.copy(
-                downloadTasks = nextTasks,
                 downloadPage = state.downloadPage.copy(
                     allItems = updatedAll,
                     items = DownloadCatalogPreviewFactory.filterItems(updatedAll, state.downloadPage.filter)

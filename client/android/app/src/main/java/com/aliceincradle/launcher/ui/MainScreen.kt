@@ -1,5 +1,6 @@
 package com.aliceincradle.launcher.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,13 +16,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,29 +31,34 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aliceincradle.launcher.data.DeviceInfo
-import com.aliceincradle.launcher.data.DownloadTaskItem
-import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.SystemTelemetry
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
 
     Scaffold(
         floatingActionButton = {
             if (uiState.selectedTab != MainTab.FILES) {
-                FloatingActionButtonGroup(
-                    visibility = uiState.fabVisibility,
-                    downloadCount = uiState.downloadTasks.size,
-                    onLaunchClick = { viewModel.launchGame() },
-                    onTerminateClick = { viewModel.terminateGame() },
-                    onDownloadsClick = { viewModel.openDownloadSheet() }
-                )
+                FloatingActionButton(
+                    onClick = {
+                        Toast.makeText(context, "游戏启动逻辑待接入", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.testTag("home_play_fab")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = "启动"
+                    )
+                }
             }
         },
         bottomBar = {
@@ -81,11 +88,7 @@ fun MainScreen(viewModel: MainViewModel) {
             MainTab.HOME -> HomeTabContent(
                 deviceInfo = uiState.deviceInfo,
                 telemetry = uiState.telemetry,
-                gameProcess = uiState.gameProcess,
-                downloadTasks = uiState.downloadTasks,
                 onGaugeClick = { viewModel.openTelemetryDialog(it) },
-                onNormalExit = { viewModel.exitGameNormally() },
-                onToggleSampleDownloads = { viewModel.toggleSampleDownloads() },
                 modifier = contentModifier
             )
 
@@ -147,23 +150,13 @@ fun MainScreen(viewModel: MainViewModel) {
         telemetry = uiState.telemetry,
         onDismiss = { viewModel.dismissTelemetryDialog() }
     )
-
-    DownloadQueueDialog(
-        isOpen = uiState.isDownloadSheetOpen,
-        tasks = uiState.downloadTasks,
-        onDismiss = { viewModel.dismissDownloadSheet() }
-    )
 }
 
 @Composable
 private fun HomeTabContent(
     deviceInfo: DeviceInfo,
     telemetry: SystemTelemetry,
-    gameProcess: GameProcessState,
-    downloadTasks: List<DownloadTaskItem>,
     onGaugeClick: (TelemetryDialogType) -> Unit,
-    onNormalExit: () -> Unit,
-    onToggleSampleDownloads: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -175,11 +168,6 @@ private fun HomeTabContent(
         TelemetryDashboardCard(
             telemetry = telemetry,
             onGaugeClick = onGaugeClick
-        )
-
-        GameStatusCard(
-            processState = gameProcess,
-            onNormalExit = onNormalExit
         )
 
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
@@ -201,32 +189,6 @@ private fun HomeTabContent(
                 InfoRow(label = "Android", value = deviceInfo.androidVersion)
                 InfoRow(label = "Python", value = deviceInfo.pythonVersion)
                 InfoRow(label = "AIC 目录", value = deviceInfo.aicVersion)
-            }
-        }
-
-        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "下载队列调试",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = if (downloadTasks.isEmpty()) "当前无下载任务（按钮隐藏）" else "进行中：${downloadTasks.size} 项",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                OutlinedButton(onClick = onToggleSampleDownloads) {
-                    Text(text = if (downloadTasks.isEmpty()) "模拟下载" else "清空下载")
-                }
             }
         }
     }
