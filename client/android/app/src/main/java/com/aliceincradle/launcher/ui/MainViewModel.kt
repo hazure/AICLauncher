@@ -12,7 +12,9 @@ import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadFilterState
 import com.aliceincradle.launcher.data.DownloadPageState
 import com.aliceincradle.launcher.data.DownloadTaskItem
+import com.aliceincradle.launcher.data.FileItem
 import com.aliceincradle.launcher.data.FileManagerDialog
+import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderPageState
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
@@ -337,21 +339,37 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
-    fun toggleFileSelection(itemId: String) {
+    fun selectFilePane(side: FilePaneSide) {
         _uiState.update { state ->
-            val updated = state.folderPage.items.map { item ->
-                if (item.id == itemId) item.copy(isSelected = !item.isSelected) else item
+            state.copy(folderPage = state.folderPage.copy(activePane = side))
+        }
+    }
+
+    fun toggleFileSelection(itemId: String) {
+        toggleFileSelection(FilePaneSide.LEFT, itemId)
+    }
+
+    fun toggleFileSelection(side: FilePaneSide, itemId: String) {
+        _uiState.update { state ->
+            val withPane = state.folderPage.copy(activePane = side)
+            val updatedFolder = updateActivePaneItems(withPane) { list ->
+                list.map { item ->
+                    if (item.id == itemId) item.copy(isSelected = !item.isSelected) else item
+                }
             }
-            state.copy(folderPage = state.folderPage.copy(items = updated))
+            state.copy(folderPage = updatedFolder)
         }
     }
 
     fun toggleSelectAllFiles() {
         _uiState.update { state ->
-            val items = state.folderPage.items
-            val allSelected = items.isNotEmpty() && items.all { it.isSelected }
-            val updated = items.map { it.copy(isSelected = !allSelected) }
-            state.copy(folderPage = state.folderPage.copy(items = updated))
+            val folder = state.folderPage
+            val active = folder.activeItems
+            val allSelected = active.isNotEmpty() && active.all { it.isSelected }
+            val updatedFolder = updateActivePaneItems(folder) { list ->
+                list.map { it.copy(isSelected = !allSelected) }
+            }
+            state.copy(folderPage = updatedFolder)
         }
     }
 
@@ -394,12 +412,13 @@ class MainViewModel @JvmOverloads constructor(
         probeScope.launch {
             _uiState.update { state ->
                 if (state.folderPage.activeDialog !is FileManagerDialog.Rename) return@update state
-                val updated = state.folderPage.items.map { item ->
-                    if (item.id == dialog.item.id) item.copy(name = newName) else item
+                val updatedFolder = updateActivePaneItems(state.folderPage) { list ->
+                    list.map { item ->
+                        if (item.id == dialog.item.id) item.copy(name = newName) else item
+                    }
                 }
                 state.copy(
-                    folderPage = state.folderPage.copy(
-                        items = updated,
+                    folderPage = updatedFolder.copy(
                         activeDialog = null,
                         actionNotice = "已重命名：${dialog.item.name} -> $newName"
                     )
@@ -426,10 +445,11 @@ class MainViewModel @JvmOverloads constructor(
         probeScope.launch {
             _uiState.update { state ->
                 if (state.folderPage.activeDialog !is FileManagerDialog.DeleteConfirm) return@update state
-                val remaining = state.folderPage.items.filterNot { it.id in targetIds }
+                val updatedFolder = updateActivePaneItems(state.folderPage) { list ->
+                    list.filterNot { it.id in targetIds }
+                }
                 state.copy(
-                    folderPage = state.folderPage.copy(
-                        items = remaining,
+                    folderPage = updatedFolder.copy(
                         activeDialog = null,
                         actionNotice = "已删除 ${targetIds.size} 项（模拟操作）"
                     )
@@ -442,20 +462,26 @@ class MainViewModel @JvmOverloads constructor(
         val folder = _uiState.value.folderPage
         val targets = folder.selectedItems
         if (targets.isEmpty()) return
+        val destination = folder.activeDestinationPath
         launchSimulatedFileProgress(
             operationTitle = "正在复制文件...",
             targets = targets,
-            targetDescription = folder.targetPath,
-            completionNotice = "已完成复制 ${targets.size} 项至 ${folder.targetPath}"
+            targetDescription = destination,
+            completionNotice = "已完成复制 ${targets.size} 项至 $destination"
         )
     }
 
     fun openPropertiesDialog() {
         _uiState.update { state ->
-            val target = state.folderPage.selectedItems.firstOrNull() ?: return@update state
-            val resolvedPath = pathProvider.buildItemPath(target.name, appContext)
+            val folder = state.folderPage
+            val target = folder.selectedItems.firstOrNull() ?: return@update state
+            val resolvedPath = if (folder.activePane == FilePaneSide.LEFT) {
+                pathProvider.buildItemPath(target.name, appContext)
+            } else {
+                "${folder.targetPath}/${target.name}"
+            }
             state.copy(
-                folderPage = state.folderPage.copy(
+                folderPage = folder.copy(
                     activeDialog = FileManagerDialog.Properties(
                         item = target,
                         resolvedPath = resolvedPath
@@ -533,20 +559,21 @@ class MainViewModel @JvmOverloads constructor(
         probeScope.launch {
             _uiState.update { state ->
                 if (state.folderPage.activeDialog !is FileManagerDialog.PermissionEdit) return@update state
-                val updated = state.folderPage.items.map { item ->
-                    if (item.id == dialog.item.id) {
-                        item.copy(
-                            permissions = resolvedOctal,
-                            recursiveApplied = dialog.applyRecursively
-                        )
-                    } else {
-                        item
+                val updatedFolder = updateActivePaneItems(state.folderPage) { list ->
+                    list.map { item ->
+                        if (item.id == dialog.item.id) {
+                            item.copy(
+                                permissions = resolvedOctal,
+                                recursiveApplied = dialog.applyRecursively
+                            )
+                        } else {
+                            item
+                        }
                     }
                 }
                 val recursiveNote = if (dialog.applyRecursively) "（含子目录递归）" else ""
                 state.copy(
-                    folderPage = state.folderPage.copy(
-                        items = updated,
+                    folderPage = updatedFolder.copy(
                         activeDialog = null,
                         actionNotice = "已更新权限：${dialog.item.name} -> $resolvedOctal$recursiveNote"
                     )
@@ -618,9 +645,20 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
+    private fun updateActivePaneItems(
+        folder: FolderPageState,
+        transform: (List<FileItem>) -> List<FileItem>
+    ): FolderPageState {
+        return if (folder.activePane == FilePaneSide.LEFT) {
+            folder.copy(items = transform(folder.items))
+        } else {
+            folder.copy(targetItems = transform(folder.targetItems))
+        }
+    }
+
     private fun launchSimulatedFileProgress(
         operationTitle: String,
-        targets: List<com.aliceincradle.launcher.data.FileItem>,
+        targets: List<FileItem>,
         targetDescription: String,
         completionNotice: String
     ) {

@@ -22,6 +22,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import kotlin.math.abs
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -66,36 +67,55 @@ class FolderAndSettingsScreenScreenshotTest {
             composeTestRule.onNodeWithTag(tag).assertIsNotEnabled()
         }
 
-        composeTestRule.onNodeWithTag("folder_vertical_scrollbar").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("folder_scrollbar_thumb").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("left_vertical_scrollbar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("left_scrollbar_thumb").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("right_vertical_scrollbar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("right_scrollbar_thumb").assertIsDisplayed()
 
-        val thumbTopBefore = composeTestRule
-            .onNodeWithTag("folder_scrollbar_thumb")
+        val leftThumbBefore = composeTestRule
+            .onNodeWithTag("left_scrollbar_thumb")
+            .fetchSemanticsNode()
+            .boundsInRoot
+            .top
+        val rightThumbBefore = composeTestRule
+            .onNodeWithTag("right_scrollbar_thumb")
             .fetchSemanticsNode()
             .boundsInRoot
             .top
 
         captureHostBitmap(hostView, "folder_360dp.png")
 
-        composeTestRule.onNodeWithTag("folder_lazy_column").performScrollToIndex(8)
+        composeTestRule.onNodeWithTag("folder_left_lazy_column").performScrollToIndex(8)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("folder_right_lazy_column").performScrollToIndex(9)
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("AliceInCradle.exe").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("folder_exe_logo", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithTag("folder_item_file-alice-exe").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("folder_exe_logo_file-alice-exe", useUnmergedTree = true).assertIsDisplayed()
 
-        val thumbTopAfter = composeTestRule
-            .onNodeWithTag("folder_scrollbar_thumb")
+        val leftThumbAfter = composeTestRule
+            .onNodeWithTag("left_scrollbar_thumb")
+            .fetchSemanticsNode()
+            .boundsInRoot
+            .top
+        val rightThumbAfter = composeTestRule
+            .onNodeWithTag("right_scrollbar_thumb")
             .fetchSemanticsNode()
             .boundsInRoot
             .top
 
         assertTrue(
-            "Folder scrollbar thumb must move down on scroll: before=$thumbTopBefore, after=$thumbTopAfter",
-            thumbTopAfter > thumbTopBefore
+            "Left scrollbar thumb must move down on scroll: before=$leftThumbBefore, after=$leftThumbAfter",
+            leftThumbAfter > leftThumbBefore
+        )
+        assertTrue(
+            "Right scrollbar thumb must move down on scroll: before=$rightThumbBefore, after=$rightThumbAfter",
+            rightThumbAfter > rightThumbBefore
         )
 
-        composeTestRule.onNodeWithTag("folder_checkbox_file-alice-exe").performClick()
+        composeTestRule.onNodeWithTag("folder_item_file-alice-exe").performClick()
         composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("folder_item_selected_file-alice-exe", useUnmergedTree = true).assertIsDisplayed()
         composeTestRule.onNodeWithText("选中 1 项文件，约 64.0 MB").assertIsDisplayed()
         composeTestRule.onNodeWithTag("file_action_info").assertIsEnabled().performClick()
         composeTestRule.waitForIdle()
@@ -132,7 +152,8 @@ class FolderAndSettingsScreenScreenshotTest {
         composeTestRule.waitForIdle()
 
         assertFolderElementsDisplayed(hostView)
-        composeTestRule.onNodeWithTag("folder_scrollbar_thumb").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("left_scrollbar_thumb").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("right_scrollbar_thumb").assertIsDisplayed()
         captureHostBitmap(hostView, "folder_412dp.png")
     }
 
@@ -192,9 +213,15 @@ class FolderAndSettingsScreenScreenshotTest {
     }
 
     private fun assertFolderElementsDisplayed(hostView: View) {
+        val leftPaneBounds = composeTestRule.onNodeWithTag("folder_left_pane").fetchSemanticsNode().boundsInRoot
+        val rightPaneBounds = composeTestRule.onNodeWithTag("folder_right_pane").fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "Dual panes must split width 50:50: left=${leftPaneBounds.width}, right=${rightPaneBounds.width}",
+            abs(leftPaneBounds.width - rightPaneBounds.width) <= 2f
+        )
         composeTestRule.onNodeWithTag("folder_current_path").assertIsDisplayed()
         composeTestRule.onNodeWithTag("folder_target_path").assertIsDisplayed()
-        composeTestRule.onNodeWithText("AliceInCradle_Data").assertIsDisplayed()
+        composeTestRule.onNodeWithText("选择").assertDoesNotExist()
         composeTestRule.onNodeWithTag("folder_selection_summary").assertIsDisplayed()
         composeTestRule.onNodeWithTag("folder_total_summary").assertIsDisplayed()
         composeTestRule.onNodeWithTag("file_bottom_action_bar").assertIsDisplayed()

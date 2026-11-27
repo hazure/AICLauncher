@@ -5,6 +5,7 @@ import com.aliceincradle.launcher.data.DefaultPathProvider
 import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadTaskItem
 import com.aliceincradle.launcher.data.FileManagerDialog
+import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderEntryType
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
@@ -202,6 +203,14 @@ class MainViewModelTest {
         vm.confirmDeleteSelected()
         assertEquals(8, vm.uiState.value.folderPage.items.size)
         assertNull(vm.uiState.value.folderPage.activeDialog)
+
+        // Switching to RIGHT pane selects target directory items independently and copies back to LEFT path
+        vm.toggleFileSelection(FilePaneSide.RIGHT, "dst-dll-unity")
+        assertEquals(FilePaneSide.RIGHT, vm.uiState.value.folderPage.activePane)
+        assertEquals(1, vm.uiState.value.folderPage.selectedCount)
+        assertEquals(DefaultPathProvider.DEFAULT_CURRENT_DIR, vm.uiState.value.folderPage.activeDestinationPath)
+        vm.startCopySelectedFiles()
+        assertTrue(vm.uiState.value.folderPage.actionNotice?.contains(DefaultPathProvider.DEFAULT_CURRENT_DIR) == true)
     }
 
     @Test

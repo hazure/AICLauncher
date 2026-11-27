@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -28,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
@@ -45,7 +47,6 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
@@ -64,7 +65,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,18 +77,19 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aliceincradle.launcher.data.FileItem
 import com.aliceincradle.launcher.data.FileManagerDialog
+import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderEntryType
 import com.aliceincradle.launcher.data.FolderPageState
 import com.aliceincradle.launcher.data.PosixPermissions
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FolderScreen(
     state: FolderPageState,
-    onToggleSelection: (String) -> Unit,
-    onToggleSelectAll: () -> Unit,
+    onSelectPane: (FilePaneSide) -> Unit,
+    onToggleSelection: (FilePaneSide, String) -> Unit,
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onCopyClick: () -> Unit,
@@ -108,7 +109,8 @@ fun FolderScreen(
     onDismissDialog: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val listState = rememberLazyListState()
+    val leftListState = rememberLazyListState()
+    val rightListState = rememberLazyListState()
     val safTreeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -120,14 +122,9 @@ fun FolderScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        DualPanePathHeader(
-            currentPath = state.currentPath,
-            targetPath = state.targetPath
-        )
-
         state.actionNotice?.let { notice ->
             Surface(
                 modifier = Modifier
@@ -147,73 +144,46 @@ fun FolderScreen(
             }
         }
 
-        Surface(
+        // MT Manager style 50% : 50% dual-pane file browser
+        Row(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            color = MaterialTheme.colorScheme.surface
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "文件列表（左侧图标与名称）",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = "选择",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable(onClick = onToggleSelectAll)
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                            .testTag("folder_select_all_header")
-                    )
-                }
-                HorizontalDivider()
+            FilePaneColumn(
+                pathText = state.currentPath,
+                isActive = state.activePane == FilePaneSide.LEFT,
+                items = state.items,
+                listState = leftListState,
+                paneTag = "folder_left_pane",
+                headerTag = "folder_current_path",
+                listTag = "folder_left_lazy_column",
+                scrollbarTag = "left_vertical_scrollbar",
+                thumbTag = "left_scrollbar_thumb",
+                onHeaderClick = { onSelectPane(FilePaneSide.LEFT) },
+                onRowClick = { itemId -> onToggleSelection(FilePaneSide.LEFT, itemId) },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            )
 
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                ) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(end = 12.dp)
-                            .testTag("folder_lazy_column"),
-                        contentPadding = PaddingValues(vertical = 4.dp)
-                    ) {
-                        items(items = state.items, key = { it.id }) { item ->
-                            FileComparisonRow(
-                                item = item,
-                                onToggleSelection = { onToggleSelection(item.id) }
-                            )
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-                        }
-                    }
-
-                    VerticalScrollbar(
-                        listState = listState,
-                        thumbTag = "folder_scrollbar_thumb",
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .fillMaxHeight()
-                            .width(8.dp)
-                            .testTag("folder_vertical_scrollbar")
-                    )
-                }
-            }
+            FilePaneColumn(
+                pathText = state.targetPath,
+                isActive = state.activePane == FilePaneSide.RIGHT,
+                items = state.targetItems,
+                listState = rightListState,
+                paneTag = "folder_right_pane",
+                headerTag = "folder_target_path",
+                listTag = "folder_right_lazy_column",
+                scrollbarTag = "right_vertical_scrollbar",
+                thumbTag = "right_scrollbar_thumb",
+                onHeaderClick = { onSelectPane(FilePaneSide.RIGHT) },
+                onRowClick = { itemId -> onToggleSelection(FilePaneSide.RIGHT, itemId) },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            )
         }
 
         Surface(
@@ -299,55 +269,109 @@ fun FolderScreen(
 }
 
 @Composable
-private fun DualPanePathHeader(
-    currentPath: String,
-    targetPath: String
+private fun FilePaneColumn(
+    pathText: String,
+    isActive: Boolean,
+    items: List<FileItem>,
+    listState: LazyListState,
+    paneTag: String,
+    headerTag: String,
+    listTag: String,
+    scrollbarTag: String,
+    thumbTag: String,
+    onHeaderClick: () -> Unit,
+    onRowClick: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "当前路径",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = currentPath,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("folder_current_path")
-                )
-            }
-            VerticalDivider(
+    val borderColor = if (isActive) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+    }
+
+    Surface(
+        modifier = modifier.testTag(paneTag),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(if (isActive) 1.5.dp else 1.dp, borderColor),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Surface(
                 modifier = Modifier
-                    .height(28.dp)
-                    .padding(horizontal = 10.dp)
-            )
-            Column(
-                modifier = Modifier.weight(1f),
-                horizontalAlignment = Alignment.End
+                    .fillMaxWidth()
+                    .clickable(onClick = onHeaderClick)
+                    .testTag(headerTag),
+                color = if (isActive) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+                }
             ) {
-                Text(
-                    text = "目标路径",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = targetPath,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.End,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("folder_target_path")
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FolderOpen,
+                        contentDescription = null,
+                        tint = if (isActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = pathText,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                        color = if (isActive) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(end = 9.dp)
+                        .testTag(listTag),
+                    contentPadding = PaddingValues(vertical = 4.dp)
+                ) {
+                    items(items = items, key = { it.id }) { item ->
+                        FilePaneRow(
+                            item = item,
+                            onClick = { onRowClick(item.id) }
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                    }
+                }
+
+                VerticalScrollbar(
+                    listState = listState,
+                    thumbTag = thumbTag,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(6.dp)
+                        .testTag(scrollbarTag)
                 )
             }
         }
@@ -355,29 +379,36 @@ private fun DualPanePathHeader(
 }
 
 @Composable
-private fun FileComparisonRow(
+private fun FilePaneRow(
     item: FileItem,
-    onToggleSelection: () -> Unit
+    onClick: () -> Unit
 ) {
-    Row(
+    val bgColor = if (item.isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+    } else {
+        Color.Transparent
+    }
+
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 76.dp)
-            .clickable(onClick = onToggleSelection)
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .heightIn(min = 82.dp)
+            .clickable(onClick = onClick)
             .testTag("folder_item_${item.id}"),
-        verticalAlignment = Alignment.CenterVertically
+        color = bgColor
     ) {
         Row(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             if (item.type == FolderEntryType.EXECUTABLE) {
                 PlaceholderLogoBox(
                     text = item.logoText,
-                    size = 36.dp,
-                    modifier = Modifier.testTag("folder_exe_logo")
+                    size = 26.dp,
+                    modifier = Modifier.testTag("folder_exe_logo_${item.id}")
                 )
             } else {
                 val (icon, tint, desc) = resolveEntryIcon(item)
@@ -386,7 +417,7 @@ private fun FileComparisonRow(
                     contentDescription = desc,
                     tint = tint,
                     modifier = Modifier
-                        .size(28.dp)
+                        .size(22.dp)
                         .testTag("folder_item_icon_${item.id}")
                 )
             }
@@ -395,34 +426,39 @@ private fun FileComparisonRow(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(
-                    text = item.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = item.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = if (item.isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (item.isSelected) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "已选中",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .size(14.dp)
+                                .testTag("folder_item_selected_${item.id}")
+                        )
+                    }
+                }
                 Text(
                     text = "${item.sizeLabel} · ${item.permissions}",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
         }
-
-        VerticalDivider(
-            modifier = Modifier
-                .height(34.dp)
-                .padding(horizontal = 8.dp)
-        )
-
-        Checkbox(
-            checked = item.isSelected,
-            onCheckedChange = { onToggleSelection() },
-            modifier = Modifier.testTag("folder_checkbox_${item.id}")
-        )
     }
 }
 

@@ -105,8 +105,8 @@ fun MainScreen(viewModel: MainViewModel) {
 
             MainTab.FILES -> FolderScreen(
                 state = uiState.folderPage,
-                onToggleSelection = { viewModel.toggleFileSelection(it) },
-                onToggleSelectAll = { viewModel.toggleSelectAllFiles() },
+                onSelectPane = { viewModel.selectFilePane(it) },
+                onToggleSelection = { side, id -> viewModel.toggleFileSelection(side, id) },
                 onRenameClick = { viewModel.openRenameDialog() },
                 onDeleteClick = { viewModel.openDeleteConfirmDialog() },
                 onCopyClick = { viewModel.startCopySelectedFiles() },

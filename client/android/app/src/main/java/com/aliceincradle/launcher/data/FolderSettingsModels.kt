@@ -141,24 +141,40 @@ sealed class FileManagerDialog {
     ) : FileManagerDialog()
 }
 
+enum class FilePaneSide {
+    LEFT,
+    RIGHT
+}
+
 data class FolderPageState(
     val currentPath: String = DefaultPathProvider.DEFAULT_CURRENT_DIR,
     val targetPath: String = DefaultPathProvider.DEFAULT_TARGET_DIR,
     val items: List<FileItem> = FolderPreviewFactory.createDefaultItems(),
+    val targetItems: List<FileItem> = FolderPreviewFactory.createTargetItems(),
+    val activePane: FilePaneSide = FilePaneSide.LEFT,
     val activeDialog: FileManagerDialog? = null,
     val actionNotice: String? = null
 ) {
+    val activeItems: List<FileItem>
+        get() = if (activePane == FilePaneSide.LEFT) items else targetItems
+
+    val activeSourcePath: String
+        get() = if (activePane == FilePaneSide.LEFT) currentPath else targetPath
+
+    val activeDestinationPath: String
+        get() = if (activePane == FilePaneSide.LEFT) targetPath else currentPath
+
     val selectedItems: List<FileItem>
-        get() = items.filter { it.isSelected }
+        get() = activeItems.filter { it.isSelected }
 
     val selectedCount: Int
         get() = selectedItems.size
 
     val fileCount: Int
-        get() = items.count { !it.isFolder }
+        get() = activeItems.count { !it.isFolder }
 
     val folderCount: Int
-        get() = items.count { it.isFolder }
+        get() = activeItems.count { it.isFolder }
 
     val selectedTotalBytes: Long
         get() = selectedItems.sumOf { it.sizeBytes }
@@ -286,6 +302,89 @@ object FolderPreviewFactory {
             permissions = "0777",
             type = FolderEntryType.EXECUTABLE,
             detailText = "Zero-CRT 原生 Win64 启动引导程序。"
+        )
+    )
+
+    fun createTargetItems(): List<FileItem> = listOf(
+        FileItem(
+            id = "dst-dir-data",
+            name = "AliceInCradle_Data",
+            isFolder = true,
+            sizeBytes = 640L * MB,
+            permissions = "0755",
+            type = FolderEntryType.FOLDER
+        ),
+        FileItem(
+            id = "dst-dir-mono",
+            name = "MonoBleedingEdge",
+            isFolder = true,
+            sizeBytes = 42L * MB,
+            permissions = "0755",
+            type = FolderEntryType.FOLDER
+        ),
+        FileItem(
+            id = "dst-dir-mods",
+            name = "Mods",
+            isFolder = true,
+            sizeBytes = 128L * MB,
+            permissions = "0777",
+            type = FolderEntryType.FOLDER
+        ),
+        FileItem(
+            id = "dst-dir-bepinex",
+            name = "BepInEx",
+            isFolder = true,
+            sizeBytes = 24L * MB,
+            permissions = "0755",
+            type = FolderEntryType.FOLDER
+        ),
+        FileItem(
+            id = "dst-exe-aic",
+            name = "AliceInCradle.exe",
+            isFolder = false,
+            sizeBytes = 64L * MB,
+            permissions = "0777",
+            type = FolderEntryType.EXECUTABLE
+        ),
+        FileItem(
+            id = "dst-dll-unity",
+            name = "UnityPlayer.dll",
+            isFolder = false,
+            sizeBytes = 31L * MB,
+            permissions = "0755",
+            type = FolderEntryType.OTHER
+        ),
+        FileItem(
+            id = "dst-sh-launcher",
+            name = "launcher.sh",
+            isFolder = false,
+            sizeBytes = 2L * KB,
+            permissions = "0755",
+            type = FolderEntryType.SHELL
+        ),
+        FileItem(
+            id = "dst-conf-dxvk",
+            name = "dxvk.conf",
+            isFolder = false,
+            sizeBytes = 1L * KB,
+            permissions = "0644",
+            type = FolderEntryType.TEXT
+        ),
+        FileItem(
+            id = "dst-py-patch",
+            name = "patch_unsafeAssem.py",
+            isFolder = false,
+            sizeBytes = 30L * KB,
+            permissions = "0644",
+            type = FolderEntryType.PYTHON
+        ),
+        FileItem(
+            id = "dst-txt-readme",
+            name = "README.txt",
+            isFolder = false,
+            sizeBytes = 15L * KB,
+            permissions = "0644",
+            type = FolderEntryType.TEXT
         )
     )
 }
