@@ -1,0 +1,137 @@
+name: Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+# 权限最小化：仅声明 issues: write 权限
+permissions:
+  issues: write
+
+# 同一 Issue 按顺序串行处理，避免 opened 与 edited 并发竞争
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    # 仅处理普通 Issue，避免机器人自触发循环
+    if: github.event.issue.pull_request == null && !endsWith(github.event.issue.user.login, '[bot]')
+    steps:
+      - name: Triage issue with deterministic rule engine
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const issue_number = issue.number;
+            const title = issue.title || '';
+            const body = issue.body || '';
+            const fullText = `${title}\n${body}`;
+
+            const bugRegex = /崩溃|闪退|报错|黑屏|无法启动|bug|error|crash/i;
+            const enhancementRegex = /建议|希望|能不能|求加|enhancement|feature/i;
+            const reproRegex = /复现|步骤|如何重现|reproduce/i;
+            const versionRegex = /AIC|版本|version/i;
+
+            const isBug = bugRegex.test(fullText);
+            const isEnhancement = enhancementRegex.test(fullText);
+
+            const targetLabels = [];
+            if (isBug) targetLabels.push('bug');
+            if (isEnhancement) targetLabels.push('enhancement');
+            if (!isBug && !isEnhancement) targetLabels.push('question');
+
+            const existingLabels = new Set((issue.labels || []).map((l) => l.name));
+            const missingInfo = [];
+
+            if (isBug) {
+              if (!reproRegex.test(body)) missingInfo.push('复现步骤');
+              if (!versionRegex.test(body)) missingInfo.push('AIC 版本');
+              if (missingInfo.length > 0) {
+                targetLabels.push('needs-info');
+              }
+            }
+
+            // 仅添加尚未存在的目标标签
+            const labelsToAdd = targetLabels.filter((name) => !existingLabels.has(name));
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number,
+                labels: labelsToAdd,
+              });
+            }
+
+            // 编辑后若从默认 question 转为明确 bug/enhancement，移除自动遗留的 question 标签
+            if ((isBug || isEnhancement) && existingLabels.has('question')) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number,
+                  name: 'question',
+                });
+              } catch (err) {
+                if (err.status !== 404) throw err;
+              }
+            }
+
+            // 仅对 bug 类进行 needs-info 标签同步与缺失信息提醒
+            if (isBug && missingInfo.length > 0) {
+              const disclaimer = '*（本回复由自动化工具生成，仅用于分类辅助，不代表项目作者立场）*';
+              const marker = '<!-- aicl-issue-triage:needs-info -->';
+              const missingList = missingInfo.map((item) => `- **${item}**`).join('\n');
+              const commentBody = [
+                marker,
+                '感谢提交问题反馈！为了更快排查定位，建议在 Issue 正文中补充以下信息：',
+                '',
+                missingList,
+                '',
+                '补充完成后维护者（或再次编辑正文后自动化流程）会及时跟进处理。',
+                '',
+                disclaimer,
+              ].join('\n');
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number,
+                per_page: 100,
+              });
+              const existingNotice = comments.find((c) => (c.body || '').includes(marker));
+
+              if (existingNotice) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existingNotice.id,
+                  body: commentBody,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number,
+                  body: commentBody,
+                });
+              }
+            } else if (existingLabels.has('needs-info')) {
+              // 信息已补齐或非 bug 类时，自动移除 needs-info 标签
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number,
+                  name: 'needs-info',
+                });
+              } catch (err) {
+                if (err.status !== 404) throw err;
+              }
+            }
+
+            core.info(
+              `Triaged #${issue_number}: targetLabels=${JSON.stringify(targetLabels)}, missingInfo=${JSON.stringify(missingInfo)}`
+            );

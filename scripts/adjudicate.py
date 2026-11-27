@@ -156,6 +156,25 @@ def adjudicate_card(args) -> int:
     return 0 if verdict == "PASS" else 1
 
 
+def scan_static() -> int:
+    from gate_check import check_file_g9_g11
+    errors = []
+    for dirpath, dirnames, filenames in os.walk("."):
+        dirnames[:] = [d for d in dirnames if d not in {".git", "AGENTS", "__pycache__", "build", ".gradle"}]
+        for fn in filenames:
+            if not (fn.endswith(".kt") or fn.endswith(".py")):
+                continue
+            p = os.path.join(dirpath, fn).lstrip("./")
+            txt = open(p, "r", encoding="utf-8", errors="ignore").read()
+            errors.extend(check_file_g9_g11(p, txt))
+    if errors:
+        for e in errors:
+            print(f"[FAIL] {e}")
+        return 1
+    print("[PASS] Static scan (G9/X3 + ProcessBuilder try-catch) passed.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Adjudicator (Role C)")
     parser.add_argument("--admit-all", help="Run C1-C10 admission on cards directory")
@@ -164,14 +183,21 @@ def main() -> int:
     parser.add_argument("--diff", default="", help="Path to git diff file")
     parser.add_argument("--baseline", default="docs/baseline/baseline.json", help="Baseline JSON path")
     parser.add_argument("--round", type=int, default=1, help="Review round")
-    parser.add_argument("--out", required=True, help="Output review markdown path")
+    parser.add_argument("--out", help="Output review markdown path")
+    parser.add_argument("--scan-static", action="store_true", help="Run static G9/X3 and ProcessBuilder checks")
     args = parser.parse_args()
 
+    if args.scan_static:
+        return scan_static()
     if args.admit_all:
+        if not args.out:
+            parser.error("--out is required with --admit-all")
         return admit_all(args.admit_all, args.out)
     if args.card:
+        if not args.out:
+            parser.error("--out is required with --card")
         return adjudicate_card(args)
-    parser.error("Provide either --admit-all or --card")
+    parser.error("Provide --scan-static, --admit-all, or --card")
     return 1
 
 

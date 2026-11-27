@@ -4,6 +4,8 @@
 
 一个使用 Jetpack Compose 从零编写的第三方安卓启动器，面向《Alice In Cradle》在 Android / Termux / Wine 转译环境下的启动、资源管理与兼容运行。
 
+AIC 的 Mod 加载及补丁支持已迁移至独立项目 AICP。
+
 ## 截图
 
 （留空待补）
