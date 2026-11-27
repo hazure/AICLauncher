@@ -1,5 +1,7 @@
 package com.aliceincradle.launcher.data
 
+import java.util.Locale
+
 enum class FolderEntryType {
     FOLDER,
     TEXT,
@@ -9,33 +11,167 @@ enum class FolderEntryType {
     OTHER
 }
 
-enum class FolderAction(val label: String) {
-    INFO("info"),
-    DELETE("Del"),
-    COPY("Copy"),
-    PLACE("Place"),
-    RUNNING("Running")
+data class PosixPermissions(
+    val suid: Boolean = false,
+    val sgid: Boolean = false,
+    val stickyBit: Boolean = false,
+    val ownerR: Boolean = true,
+    val ownerW: Boolean = true,
+    val ownerX: Boolean = true,
+    val groupR: Boolean = true,
+    val groupW: Boolean = false,
+    val groupX: Boolean = true,
+    val otherR: Boolean = true,
+    val otherW: Boolean = false,
+    val otherX: Boolean = true
+) {
+    fun toFourDigitOctal(): String {
+        val special = (if (suid) 4 else 0) + (if (sgid) 2 else 0) + (if (stickyBit) 1 else 0)
+        val owner = (if (ownerR) 4 else 0) + (if (ownerW) 2 else 0) + (if (ownerX) 1 else 0)
+        val group = (if (groupR) 4 else 0) + (if (groupW) 2 else 0) + (if (groupX) 1 else 0)
+        val other = (if (otherR) 4 else 0) + (if (otherW) 2 else 0) + (if (otherX) 1 else 0)
+        return "$special$owner$group$other"
+    }
+
+    fun toSymbolicString(): String {
+        val oR = if (ownerR) 'r' else '-'
+        val oW = if (ownerW) 'w' else '-'
+        val oX = when {
+            suid && ownerX -> 's'
+            suid -> 'S'
+            ownerX -> 'x'
+            else -> '-'
+        }
+        val gR = if (groupR) 'r' else '-'
+        val gW = if (groupW) 'w' else '-'
+        val gX = when {
+            sgid && groupX -> 's'
+            sgid -> 'S'
+            groupX -> 'x'
+            else -> '-'
+        }
+        val tR = if (otherR) 'r' else '-'
+        val tW = if (otherW) 'w' else '-'
+        val tX = when {
+            stickyBit && otherX -> 't'
+            stickyBit -> 'T'
+            otherX -> 'x'
+            else -> '-'
+        }
+        return "$oR$oW$oX$gR$gW$gX$tR$tW$tX"
+    }
+
+    companion object {
+        fun fromOctal(raw: String): PosixPermissions? {
+            val cleaned = raw.trim()
+            if (cleaned.length !in 3..4 || cleaned.any { it !in '0'..'7' }) {
+                return null
+            }
+            val padded = if (cleaned.length == 3) "0$cleaned" else cleaned
+            val special = padded[0].digitToInt()
+            val owner = padded[1].digitToInt()
+            val group = padded[2].digitToInt()
+            val other = padded[3].digitToInt()
+            return PosixPermissions(
+                suid = (special and 4) != 0,
+                sgid = (special and 2) != 0,
+                stickyBit = (special and 1) != 0,
+                ownerR = (owner and 4) != 0,
+                ownerW = (owner and 2) != 0,
+                ownerX = (owner and 1) != 0,
+                groupR = (group and 4) != 0,
+                groupW = (group and 2) != 0,
+                groupX = (group and 1) != 0,
+                otherR = (other and 4) != 0,
+                otherW = (other and 2) != 0,
+                otherX = (other and 1) != 0
+            )
+        }
+    }
 }
 
-data class FolderItem(
+data class FileItem(
     val id: String,
     val name: String,
-    val type: FolderEntryType,
-    val sizeLabel: String,
+    val isFolder: Boolean,
+    val sizeBytes: Long,
+    val permissions: String = if (isFolder) "0755" else "0644",
+    val isSelected: Boolean = false,
+    val type: FolderEntryType = if (isFolder) FolderEntryType.FOLDER else FolderEntryType.OTHER,
     val detailText: String = "",
     val logoText: String = "Logo",
-    val isLauncherTarget: Boolean = false
-)
+    val recursiveApplied: Boolean = false
+) {
+    val sizeLabel: String
+        get() = formatFileSize(sizeBytes)
+}
+
+sealed class FileManagerDialog {
+    data class FileOpProgress(
+        val operationTitle: String,
+        val currentFileName: String,
+        val targetDescription: String,
+        val progressPercent: Int
+    ) : FileManagerDialog()
+
+    data class DeleteConfirm(
+        val targets: List<FileItem>
+    ) : FileManagerDialog()
+
+    data class Properties(
+        val item: FileItem,
+        val resolvedPath: String
+    ) : FileManagerDialog()
+
+    data class PermissionEdit(
+        val item: FileItem,
+        val permissions: PosixPermissions,
+        val octalInput: String,
+        val applyRecursively: Boolean = false
+    ) : FileManagerDialog()
+
+    data class Rename(
+        val item: FileItem,
+        val draftName: String
+    ) : FileManagerDialog()
+
+    data class ExportSheet(
+        val targets: List<FileItem>,
+        val downloadTargets: List<ExportTarget>
+    ) : FileManagerDialog()
+}
 
 data class FolderPageState(
-    val countSummary: String = "共 3 个文件夹，7 个文件",
-    val totalSizeSummary: String = "共占 37GB",
-    val items: List<FolderItem> = FolderPreviewFactory.createDefaultItems(),
-    val selectedItemId: String? = "file-alice-exe",
-    val clipboardItemName: String? = null,
-    val actionNotice: String? = null,
-    val inspectedItem: FolderItem? = null
-)
+    val currentPath: String = DefaultPathProvider.DEFAULT_CURRENT_DIR,
+    val targetPath: String = DefaultPathProvider.DEFAULT_TARGET_DIR,
+    val items: List<FileItem> = FolderPreviewFactory.createDefaultItems(),
+    val activeDialog: FileManagerDialog? = null,
+    val actionNotice: String? = null
+) {
+    val selectedItems: List<FileItem>
+        get() = items.filter { it.isSelected }
+
+    val selectedCount: Int
+        get() = selectedItems.size
+
+    val fileCount: Int
+        get() = items.count { !it.isFolder }
+
+    val folderCount: Int
+        get() = items.count { it.isFolder }
+
+    val selectedTotalBytes: Long
+        get() = selectedItems.sumOf { it.sizeBytes }
+
+    val hasSelection: Boolean
+        get() = selectedCount > 0
+
+    val selectionSummaryText: String
+        get() = "选中 $selectedCount 项文件，约 ${formatFileSize(selectedTotalBytes)}"
+
+    val totalCountSummaryText: String
+        get() = "共 $fileCount 个文件，$folderCount 个文件夹"
+}
 
 data class SettingsPageState(
     val selectedPythonVersion: String = "Python 3.10",
@@ -53,79 +189,103 @@ data class SettingsPageState(
     val statusNotice: String? = null
 )
 
+fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0L) return "0 MB"
+    val kb = 1024.0
+    val mb = kb * 1024.0
+    val gb = mb * 1024.0
+    return when {
+        bytes >= gb -> String.format(Locale.US, "%.1f GB", bytes / gb)
+        bytes >= mb -> String.format(Locale.US, "%.1f MB", bytes / mb)
+        else -> String.format(Locale.US, "%.1f KB", bytes / kb)
+    }
+}
+
 object FolderPreviewFactory {
-    fun createDefaultItems(): List<FolderItem> = listOf(
-        FolderItem(
+    private const val KB = 1024L
+    private const val MB = 1024L * 1024L
+
+    fun createDefaultItems(): List<FileItem> = listOf(
+        FileItem(
             id = "dir-data",
             name = "AliceInCradle_Data",
+            isFolder = true,
+            sizeBytes = 640L * MB,
+            permissions = "0755",
             type = FolderEntryType.FOLDER,
-            sizeLabel = "文件夹 · 31.4 GB",
             detailText = "游戏主资产与场景包目录。"
         ),
-        FolderItem(
+        FileItem(
             id = "dir-mods",
             name = "Mods",
+            isFolder = true,
+            sizeBytes = 128L * MB,
+            permissions = "0777",
             type = FolderEntryType.FOLDER,
-            sizeLabel = "文件夹 · 4.2 GB",
             detailText = "本地模组与动态挂载扩展池。"
         ),
-        FolderItem(
+        FileItem(
             id = "dir-streaming",
             name = "StreamingAssets",
+            isFolder = true,
+            sizeBytes = 96L * MB,
+            permissions = "0755",
             type = FolderEntryType.FOLDER,
-            sizeLabel = "文件夹 · 1.3 GB",
             detailText = "包含原生完整性校验表 _sha.txt 与流式资源。"
         ),
-        FolderItem(
+        FileItem(
             id = "file-patch-py",
             name = "patch_unsafeAssem.py",
+            isFolder = false,
+            sizeBytes = 30L * KB,
+            permissions = "0644",
             type = FolderEntryType.PYTHON,
-            sizeLabel = "Python 脚本 · 29.8 KB",
             detailText = "CIL 字节码动态重定向与哈希同步脚本。"
         ),
-        FolderItem(
+        FileItem(
             id = "file-unmosaic-py",
             name = "unmosaic.py",
+            isFolder = false,
+            sizeBytes = 62L * KB,
+            permissions = "0644",
             type = FolderEntryType.PYTHON,
-            sizeLabel = "Python 脚本 · 62.1 KB",
             detailText = "托管层资源处理与校验辅助脚本。"
         ),
-        FolderItem(
-            id = "file-sha-py",
-            name = "update_sha.py",
-            type = FolderEntryType.PYTHON,
-            sizeLabel = "Python 脚本 · 3.2 KB",
-            detailText = "全量 SHA-256 散列表校验更新工具。"
-        ),
-        FolderItem(
+        FileItem(
             id = "file-launcher-sh",
             name = "launcher.sh",
+            isFolder = false,
+            sizeBytes = 2L * KB,
+            permissions = "0755",
             type = FolderEntryType.SHELL,
-            sizeLabel = "Shell 脚本 · 2.0 KB",
             detailText = "Box64 / DXVK / Turnip 转译层外部启动脚本。"
         ),
-        FolderItem(
+        FileItem(
             id = "file-readme-txt",
             name = "README.txt",
+            isFolder = false,
+            sizeBytes = 15L * KB,
+            permissions = "0644",
             type = FolderEntryType.TEXT,
-            sizeLabel = "文本文件 · 14.8 KB",
             detailText = "兼容补丁环境说明与构建注意事项。"
         ),
-        FolderItem(
+        FileItem(
             id = "file-notes-txt",
             name = "compat_notes.txt",
+            isFolder = false,
+            sizeBytes = 8L * KB,
+            permissions = "0644",
             type = FolderEntryType.TEXT,
-            sizeLabel = "文本文件 · 6.4 KB",
             detailText = "转译层运行参数调优记录。"
         ),
-        FolderItem(
+        FileItem(
             id = "file-alice-exe",
             name = "AliceInCradle.exe",
+            isFolder = false,
+            sizeBytes = 64L * MB,
+            permissions = "0777",
             type = FolderEntryType.EXECUTABLE,
-            sizeLabel = "可执行程序 · 64.0 MB",
-            detailText = "Zero-CRT 原生 Win64 启动引导程序（点击 Running 可模拟启动）。",
-            logoText = "Logo",
-            isLauncherTarget = true
+            detailText = "Zero-CRT 原生 Win64 启动引导程序。"
         )
     )
 }

@@ -1,12 +1,14 @@
 package com.aliceincradle.launcher.ui
 
 import com.aliceincradle.launcher.bridge.EnvDetector
+import com.aliceincradle.launcher.data.DefaultPathProvider
 import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadTaskItem
-import com.aliceincradle.launcher.data.FolderAction
+import com.aliceincradle.launcher.data.FileManagerDialog
 import com.aliceincradle.launcher.data.FolderEntryType
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
+import com.aliceincradle.launcher.data.PosixPermissions
 import com.aliceincradle.launcher.data.SystemTelemetryProvider
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -116,43 +118,90 @@ class MainViewModelTest {
     }
 
     @Test
-    fun folderPageExposesStatsTypesAndActionTransitions() {
-        val vm = MainViewModel()
-        val folder = vm.uiState.value.folderPage
+    fun folderPageStateMachineSelectionDialogsPermissionsAndIoOperations() {
+        val vm = MainViewModel(
+            ioDispatcher = Dispatchers.Unconfined,
+            autoStartPolling = false,
+            fileOpStepDelayMs = 0L
+        )
+        val initial = vm.uiState.value.folderPage
 
-        assertEquals("共 3 个文件夹，7 个文件", folder.countSummary)
-        assertEquals("共占 37GB", folder.totalSizeSummary)
-        assertEquals(10, folder.items.size)
-        val types = folder.items.map { it.type }.toSet()
-        assertTrue(types.contains(FolderEntryType.FOLDER))
-        assertTrue(types.contains(FolderEntryType.TEXT))
-        assertTrue(types.contains(FolderEntryType.PYTHON))
-        assertTrue(types.contains(FolderEntryType.SHELL))
-        assertTrue(types.contains(FolderEntryType.EXECUTABLE))
-        assertEquals("AliceInCradle.exe", folder.items.last().name)
-        assertTrue(folder.items.last().isLauncherTarget)
+        assertEquals(DefaultPathProvider.DEFAULT_CURRENT_DIR, initial.currentPath)
+        assertEquals(DefaultPathProvider.DEFAULT_TARGET_DIR, initial.targetPath)
+        assertEquals(9, initial.items.size)
+        assertFalse(initial.hasSelection)
+        assertEquals("选中 0 项文件，约 0 MB", initial.selectionSummaryText)
+        assertEquals("共 6 个文件，3 个文件夹", initial.totalCountSummaryText)
 
-        vm.selectFolderItem("file-patch-py")
-        vm.performFolderAction(FolderAction.INFO)
-        assertEquals("file-patch-py", vm.uiState.value.folderPage.inspectedItem?.id)
-        vm.dismissFolderItemInfo()
-        assertNull(vm.uiState.value.folderPage.inspectedItem)
+        // Clicking actions without selection leaves activeDialog null
+        vm.openRenameDialog()
+        vm.openDeleteConfirmDialog()
+        vm.openPropertiesDialog()
+        vm.openExportSheet()
+        assertNull(vm.uiState.value.folderPage.activeDialog)
 
-        vm.performFolderAction(FolderAction.PLACE)
-        assertEquals("剪贴板为空，请先执行 Copy", vm.uiState.value.folderPage.actionNotice)
+        // Select AliceInCradle.exe and verify stats + rename
+        vm.toggleFileSelection("file-alice-exe")
+        assertTrue(vm.uiState.value.folderPage.hasSelection)
+        assertEquals("选中 1 项文件，约 64.0 MB", vm.uiState.value.folderPage.selectionSummaryText)
 
-        vm.performFolderAction(FolderAction.COPY)
-        assertEquals("patch_unsafeAssem.py", vm.uiState.value.folderPage.clipboardItemName)
-        vm.performFolderAction(FolderAction.PLACE)
-        assertTrue(vm.uiState.value.folderPage.actionNotice?.contains("patch_unsafeAssem.py") == true)
+        vm.openRenameDialog()
+        assertTrue(vm.uiState.value.folderPage.activeDialog is FileManagerDialog.Rename)
+        vm.updateRenameDraft("Alice_Patched.exe")
+        vm.confirmRename()
+        assertNull(vm.uiState.value.folderPage.activeDialog)
+        assertEquals("Alice_Patched.exe", vm.uiState.value.folderPage.items.last().name)
 
-        vm.setCanLaunchGame(false)
-        vm.performFolderAction(FolderAction.RUNNING)
-        assertFalse(vm.uiState.value.gameProcess.isAlive)
+        // Properties -> PermissionEdit with SUID/SGID/Sticky + bidirectional 4-digit octal + recursive
+        vm.openPropertiesDialog()
+        val propDialog = vm.uiState.value.folderPage.activeDialog as FileManagerDialog.Properties
+        assertTrue(propDialog.resolvedPath.endsWith("Alice_Patched.exe"))
 
-        vm.setCanLaunchGame(true)
-        vm.performFolderAction(FolderAction.RUNNING)
-        assertTrue(vm.uiState.value.gameProcess.isAlive)
+        vm.openPermissionEditDialog()
+        val permDialog = vm.uiState.value.folderPage.activeDialog as FileManagerDialog.PermissionEdit
+        assertEquals("0777", permDialog.octalInput)
+
+        vm.updatePermissionFlags {
+            it.copy(suid = true, groupW = false, otherW = false)
+        }
+        val afterCheckbox = vm.uiState.value.folderPage.activeDialog as FileManagerDialog.PermissionEdit
+        assertEquals("4755", afterCheckbox.octalInput)
+
+        vm.updatePermissionOctalInput("600")
+        val afterOctal = vm.uiState.value.folderPage.activeDialog as FileManagerDialog.PermissionEdit
+        assertTrue(afterOctal.permissions.ownerR)
+        assertTrue(afterOctal.permissions.ownerW)
+        assertFalse(afterOctal.permissions.ownerX)
+        assertFalse(afterOctal.permissions.groupR)
+        assertFalse(afterOctal.permissions.suid)
+
+        vm.updatePermissionOctalInput("4755")
+        vm.togglePermissionRecursive(true)
+        vm.confirmPermissionEdit()
+        val updatedExe = vm.uiState.value.folderPage.items.last()
+        assertEquals("4755", updatedExe.permissions)
+        assertTrue(updatedExe.recursiveApplied)
+        assertNull(vm.uiState.value.folderPage.activeDialog)
+        assertEquals("rwsr-xr-x", PosixPermissions.fromOctal("4755")?.toSymbolicString())
+
+        // Simulated copy & export progress completes and closes dialog
+        vm.startCopySelectedFiles()
+        assertNull(vm.uiState.value.folderPage.activeDialog)
+        assertTrue(vm.uiState.value.folderPage.actionNotice?.contains("已完成复制") == true)
+
+        vm.openExportSheet()
+        val exportSheet = vm.uiState.value.folderPage.activeDialog as FileManagerDialog.ExportSheet
+        assertTrue(exportSheet.downloadTargets.isNotEmpty())
+        vm.startCustomExportToUri("content://com.android.externalstorage.documents/tree/primary%3AAIC")
+        assertNull(vm.uiState.value.folderPage.activeDialog)
+        assertTrue(vm.uiState.value.folderPage.actionNotice?.contains("primary%3AAIC") == true)
+
+        // Delete confirm removes selected item
+        vm.openDeleteConfirmDialog()
+        assertTrue(vm.uiState.value.folderPage.activeDialog is FileManagerDialog.DeleteConfirm)
+        vm.confirmDeleteSelected()
+        assertEquals(8, vm.uiState.value.folderPage.items.size)
+        assertNull(vm.uiState.value.folderPage.activeDialog)
     }
 
     @Test

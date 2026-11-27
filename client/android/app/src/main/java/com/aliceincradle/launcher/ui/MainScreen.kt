@@ -105,9 +105,25 @@ fun MainScreen(viewModel: MainViewModel) {
 
             MainTab.FILES -> FolderScreen(
                 state = uiState.folderPage,
-                onSelectItem = { viewModel.selectFolderItem(it) },
-                onActionClick = { viewModel.performFolderAction(it) },
-                onDismissItemInfo = { viewModel.dismissFolderItemInfo() },
+                onToggleSelection = { viewModel.toggleFileSelection(it) },
+                onToggleSelectAll = { viewModel.toggleSelectAllFiles() },
+                onRenameClick = { viewModel.openRenameDialog() },
+                onDeleteClick = { viewModel.openDeleteConfirmDialog() },
+                onCopyClick = { viewModel.startCopySelectedFiles() },
+                onInfoClick = { viewModel.openPropertiesDialog() },
+                onExportClick = { viewModel.openExportSheet() },
+                onRenameDraftChange = { viewModel.updateRenameDraft(it) },
+                onConfirmRename = { viewModel.confirmRename() },
+                onConfirmDelete = { viewModel.confirmDeleteSelected() },
+                onOpenPermissionEdit = { viewModel.openPermissionEditDialog() },
+                onUpdatePermissions = { viewModel.updatePermissionFlags(it) },
+                onOctalInputChange = { viewModel.updatePermissionOctalInput(it) },
+                onRecursiveToggle = { viewModel.togglePermissionRecursive(it) },
+                onConfirmPermissionEdit = { viewModel.confirmPermissionEdit() },
+                onExportToDownload = { viewModel.startExportToDownload() },
+                onCustomExportToUri = { viewModel.startCustomExportToUri(it) },
+                onCancelFileOp = { viewModel.cancelFileOperation() },
+                onDismissDialog = { viewModel.dismissFileManagerDialog() },
                 modifier = contentModifier
             )
 

@@ -3,6 +3,7 @@ package com.aliceincradle.launcher.ui
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import com.aliceincradle.launcher.bridge.EnvDetector
+import com.aliceincradle.launcher.data.DefaultPathProvider
 import com.aliceincradle.launcher.data.DeviceInfo
 import com.aliceincradle.launcher.data.DeviceInfoProvider
 import com.aliceincradle.launcher.data.DownloadCatalogItem
@@ -11,10 +12,12 @@ import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadFilterState
 import com.aliceincradle.launcher.data.DownloadPageState
 import com.aliceincradle.launcher.data.DownloadTaskItem
-import com.aliceincradle.launcher.data.FolderAction
+import com.aliceincradle.launcher.data.FileManagerDialog
 import com.aliceincradle.launcher.data.FolderPageState
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
+import com.aliceincradle.launcher.data.PathProvider
+import com.aliceincradle.launcher.data.PosixPermissions
 import com.aliceincradle.launcher.data.SettingsPageState
 import com.aliceincradle.launcher.data.SystemTelemetry
 import com.aliceincradle.launcher.data.SystemTelemetryProvider
@@ -22,6 +25,7 @@ import com.aliceincradle.launcher.data.TelemetryPreviewFactory
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -83,9 +87,11 @@ data class MainUiState(
 class MainViewModel @JvmOverloads constructor(
     private val telemetryProvider: SystemTelemetryProvider = SystemTelemetryProvider(),
     private val envDetector: EnvDetector = EnvDetector(),
+    private val pathProvider: PathProvider = DefaultPathProvider(envDetector),
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     autoStartPolling: Boolean = true,
-    private val refreshIntervalMs: Long = 2_000L
+    private val refreshIntervalMs: Long = 2_000L,
+    private val fileOpStepDelayMs: Long = 35L
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -96,6 +102,7 @@ class MainViewModel @JvmOverloads constructor(
     private var nextSimulatedPid = 10482
     private val probeScope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val refreshMutex = Mutex()
+    private var fileOpJob: Job? = null
 
     init {
         if (autoStartPolling) {
@@ -133,6 +140,8 @@ class MainViewModel @JvmOverloads constructor(
             } else {
                 null
             }
+            val currentDir = if (includeEnv) pathProvider.currentDirectoryLabel(ctx) else null
+            val targetDir = if (includeEnv) pathProvider.targetDirectoryLabel(ctx) else null
 
             _uiState.update { state ->
                 val nextInfo = updatedDeviceInfo ?: state.deviceInfo.copy(
@@ -144,11 +153,17 @@ class MainViewModel @JvmOverloads constructor(
                     state.gameProcess.isSimulated -> state.gameProcess
                     else -> detectedProcess
                 }
+                val nextFolderPage = if (currentDir != null && targetDir != null) {
+                    state.folderPage.copy(currentPath = currentDir, targetPath = targetDir)
+                } else {
+                    state.folderPage
+                }
                 state.copy(
                     isLoading = false,
                     deviceInfo = nextInfo,
                     telemetry = sampledTelemetry,
-                    gameProcess = nextProcess
+                    gameProcess = nextProcess,
+                    folderPage = nextFolderPage
                 )
             }
         }
@@ -322,70 +337,332 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
-    fun selectFolderItem(itemId: String) {
+    fun toggleFileSelection(itemId: String) {
         _uiState.update { state ->
-            state.copy(folderPage = state.folderPage.copy(selectedItemId = itemId))
+            val updated = state.folderPage.items.map { item ->
+                if (item.id == itemId) item.copy(isSelected = !item.isSelected) else item
+            }
+            state.copy(folderPage = state.folderPage.copy(items = updated))
         }
     }
 
-    fun performFolderAction(action: FolderAction) {
+    fun toggleSelectAllFiles() {
         _uiState.update { state ->
-            val folder = state.folderPage
-            val target = folder.items.find { it.id == folder.selectedItemId } ?: folder.items.firstOrNull()
-            when (action) {
-                FolderAction.INFO -> state.copy(
-                    folderPage = folder.copy(
-                        inspectedItem = target,
-                        actionNotice = target?.let { "查看属性：${it.name}" }
+            val items = state.folderPage.items
+            val allSelected = items.isNotEmpty() && items.all { it.isSelected }
+            val updated = items.map { it.copy(isSelected = !allSelected) }
+            state.copy(folderPage = state.folderPage.copy(items = updated))
+        }
+    }
+
+    fun openRenameDialog() {
+        _uiState.update { state ->
+            val target = state.folderPage.selectedItems.firstOrNull() ?: return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.Rename(item = target, draftName = target.name)
+                )
+            )
+        }
+    }
+
+    fun updateRenameDraft(draft: String) {
+        _uiState.update { state ->
+            val dialog = state.folderPage.activeDialog as? FileManagerDialog.Rename ?: return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = dialog.copy(draftName = draft)
+                )
+            )
+        }
+    }
+
+    fun confirmRename() {
+        val dialog = _uiState.value.folderPage.activeDialog as? FileManagerDialog.Rename ?: return
+        val newName = dialog.draftName.trim()
+        if (newName.isEmpty()) {
+            _uiState.update { state ->
+                state.copy(
+                    folderPage = state.folderPage.copy(
+                        activeDialog = null,
+                        actionNotice = "名称不能为空，已取消重命名"
                     )
                 )
-                FolderAction.DELETE -> state.copy(
-                    folderPage = folder.copy(
-                        actionNotice = target?.let { "模拟删除预览（未修改原文件）：${it.name}" }
-                            ?: "当前没有可删除的项目"
-                    )
-                )
-                FolderAction.COPY -> state.copy(
-                    folderPage = folder.copy(
-                        clipboardItemName = target?.name,
-                        actionNotice = target?.let { "已复制：${it.name}" } ?: "未选择要复制的项目"
-                    )
-                )
-                FolderAction.PLACE -> {
-                    val clip = folder.clipboardItemName
-                    state.copy(
-                        folderPage = folder.copy(
-                            actionNotice = if (clip != null) "已放置副本：$clip" else "剪贴板为空，请先执行 Copy"
-                        )
-                    )
+            }
+            return
+        }
+        probeScope.launch {
+            _uiState.update { state ->
+                val updated = state.folderPage.items.map { item ->
+                    if (item.id == dialog.item.id) item.copy(name = newName) else item
                 }
-                FolderAction.RUNNING -> {
-                    if (!state.canLaunchGame) {
-                        return@update state.copy(
-                            folderPage = folder.copy(actionNotice = "当前运行环境未就绪，暂不可启动")
-                        )
-                    }
-                    val pid = nextSimulatedPid++
-                    val runningState = GameProcessState(
-                        status = GameRunStatus.RUNNING,
-                        versionName = "AIC 0.3.0",
-                        pid = pid,
-                        isSimulated = true
+                state.copy(
+                    folderPage = state.folderPage.copy(
+                        items = updated,
+                        activeDialog = null,
+                        actionNotice = "已重命名：${dialog.item.name} -> $newName"
                     )
-                    state.copy(
-                        gameProcess = runningState,
-                        folderPage = folder.copy(
-                            actionNotice = "已模拟启动：${target?.name ?: "AliceInCradle.exe"} (PID: $pid)"
-                        )
-                    )
-                }
+                )
             }
         }
     }
 
-    fun dismissFolderItemInfo() {
+    fun openDeleteConfirmDialog() {
         _uiState.update { state ->
-            state.copy(folderPage = state.folderPage.copy(inspectedItem = null))
+            val targets = state.folderPage.selectedItems
+            if (targets.isEmpty()) return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.DeleteConfirm(targets = targets)
+                )
+            )
+        }
+    }
+
+    fun confirmDeleteSelected() {
+        val dialog = _uiState.value.folderPage.activeDialog as? FileManagerDialog.DeleteConfirm ?: return
+        val targetIds = dialog.targets.map { it.id }.toSet()
+        probeScope.launch {
+            _uiState.update { state ->
+                val remaining = state.folderPage.items.filterNot { it.id in targetIds }
+                state.copy(
+                    folderPage = state.folderPage.copy(
+                        items = remaining,
+                        activeDialog = null,
+                        actionNotice = "已删除 ${targetIds.size} 项（模拟操作）"
+                    )
+                )
+            }
+        }
+    }
+
+    fun startCopySelectedFiles() {
+        val folder = _uiState.value.folderPage
+        val targets = folder.selectedItems
+        if (targets.isEmpty()) return
+        launchSimulatedFileProgress(
+            operationTitle = "正在复制文件...",
+            targets = targets,
+            targetDescription = folder.targetPath,
+            completionNotice = "已完成复制 ${targets.size} 项至 ${folder.targetPath}"
+        )
+    }
+
+    fun openPropertiesDialog() {
+        _uiState.update { state ->
+            val target = state.folderPage.selectedItems.firstOrNull() ?: return@update state
+            val resolvedPath = pathProvider.buildItemPath(target.name, appContext)
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.Properties(
+                        item = target,
+                        resolvedPath = resolvedPath
+                    )
+                )
+            )
+        }
+    }
+
+    fun openPermissionEditDialog() {
+        _uiState.update { state ->
+            val target = (state.folderPage.activeDialog as? FileManagerDialog.Properties)?.item
+                ?: state.folderPage.selectedItems.firstOrNull()
+                ?: return@update state
+            val parsed = PosixPermissions.fromOctal(target.permissions) ?: PosixPermissions()
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.PermissionEdit(
+                        item = target,
+                        permissions = parsed,
+                        octalInput = parsed.toFourDigitOctal(),
+                        applyRecursively = target.recursiveApplied
+                    )
+                )
+            )
+        }
+    }
+
+    fun updatePermissionFlags(transform: (PosixPermissions) -> PosixPermissions) {
+        _uiState.update { state ->
+            val dialog = state.folderPage.activeDialog as? FileManagerDialog.PermissionEdit ?: return@update state
+            val nextPerm = transform(dialog.permissions)
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = dialog.copy(
+                        permissions = nextPerm,
+                        octalInput = nextPerm.toFourDigitOctal()
+                    )
+                )
+            )
+        }
+    }
+
+    fun updatePermissionOctalInput(rawInput: String) {
+        val filtered = rawInput.filter { it in '0'..'7' }.take(4)
+        _uiState.update { state ->
+            val dialog = state.folderPage.activeDialog as? FileManagerDialog.PermissionEdit ?: return@update state
+            val parsed = PosixPermissions.fromOctal(filtered)
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = dialog.copy(
+                        octalInput = filtered,
+                        permissions = parsed ?: dialog.permissions
+                    )
+                )
+            )
+        }
+    }
+
+    fun togglePermissionRecursive(applyRecursively: Boolean) {
+        _uiState.update { state ->
+            val dialog = state.folderPage.activeDialog as? FileManagerDialog.PermissionEdit ?: return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = dialog.copy(applyRecursively = applyRecursively)
+                )
+            )
+        }
+    }
+
+    fun confirmPermissionEdit() {
+        val dialog = _uiState.value.folderPage.activeDialog as? FileManagerDialog.PermissionEdit ?: return
+        val resolvedOctal = PosixPermissions.fromOctal(dialog.octalInput)?.toFourDigitOctal()
+            ?: dialog.permissions.toFourDigitOctal()
+        probeScope.launch {
+            _uiState.update { state ->
+                val updated = state.folderPage.items.map { item ->
+                    if (item.id == dialog.item.id) {
+                        item.copy(
+                            permissions = resolvedOctal,
+                            recursiveApplied = dialog.applyRecursively
+                        )
+                    } else {
+                        item
+                    }
+                }
+                val recursiveNote = if (dialog.applyRecursively) "（含子目录递归）" else ""
+                state.copy(
+                    folderPage = state.folderPage.copy(
+                        items = updated,
+                        activeDialog = null,
+                        actionNotice = "已更新权限：${dialog.item.name} -> $resolvedOctal$recursiveNote"
+                    )
+                )
+            }
+        }
+    }
+
+    fun openExportSheet() {
+        _uiState.update { state ->
+            val targets = state.folderPage.selectedItems
+            if (targets.isEmpty()) return@update state
+            val downloadTargets = pathProvider.downloadExportTargets(appContext)
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.ExportSheet(
+                        targets = targets,
+                        downloadTargets = downloadTargets
+                    )
+                )
+            )
+        }
+    }
+
+    fun startExportToDownload() {
+        val sheet = _uiState.value.folderPage.activeDialog as? FileManagerDialog.ExportSheet ?: return
+        val primaryTarget = sheet.downloadTargets.firstOrNull()?.displayPath
+            ?: DefaultPathProvider.DEFAULT_DOWNLOAD_LABEL
+        launchSimulatedFileProgress(
+            operationTitle = "正在导出至 Download...",
+            targets = sheet.targets,
+            targetDescription = primaryTarget,
+            completionNotice = "已导出 ${sheet.targets.size} 项至 $primaryTarget"
+        )
+    }
+
+    fun startCustomExportToUri(treeUriString: String) {
+        val targets = (_uiState.value.folderPage.activeDialog as? FileManagerDialog.ExportSheet)?.targets
+            ?: _uiState.value.folderPage.selectedItems
+        if (targets.isEmpty()) return
+        launchSimulatedFileProgress(
+            operationTitle = "正在自定义导出...",
+            targets = targets,
+            targetDescription = treeUriString,
+            completionNotice = "已导出 ${targets.size} 项至所选目录：$treeUriString"
+        )
+    }
+
+    fun cancelFileOperation() {
+        fileOpJob?.cancel()
+        fileOpJob = null
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = null,
+                    actionNotice = "已取消文件操作"
+                )
+            )
+        }
+    }
+
+    fun dismissFileManagerDialog() {
+        if (_uiState.value.folderPage.activeDialog is FileManagerDialog.FileOpProgress) {
+            cancelFileOperation()
+            return
+        }
+        _uiState.update { state ->
+            state.copy(folderPage = state.folderPage.copy(activeDialog = null))
+        }
+    }
+
+    private fun launchSimulatedFileProgress(
+        operationTitle: String,
+        targets: List<com.aliceincradle.launcher.data.FileItem>,
+        targetDescription: String,
+        completionNotice: String
+    ) {
+        fileOpJob?.cancel()
+        val firstName = targets.firstOrNull()?.name ?: ""
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.FileOpProgress(
+                        operationTitle = operationTitle,
+                        currentFileName = firstName,
+                        targetDescription = targetDescription,
+                        progressPercent = 0
+                    )
+                )
+            )
+        }
+        fileOpJob = probeScope.launch {
+            for (step in 10..100 step 10) {
+                if (fileOpStepDelayMs > 0L) {
+                    delay(fileOpStepDelayMs)
+                }
+                if (!isActive) return@launch
+                val currentItem = targets[((step - 1) * targets.size / 100).coerceIn(0, targets.lastIndex)]
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = FileManagerDialog.FileOpProgress(
+                                operationTitle = operationTitle,
+                                currentFileName = currentItem.name,
+                                targetDescription = targetDescription,
+                                progressPercent = step
+                            )
+                        )
+                    )
+                }
+            }
+            _uiState.update { state ->
+                state.copy(
+                    folderPage = state.folderPage.copy(
+                        activeDialog = null,
+                        actionNotice = completionNotice
+                    )
+                )
+            }
         }
     }
 

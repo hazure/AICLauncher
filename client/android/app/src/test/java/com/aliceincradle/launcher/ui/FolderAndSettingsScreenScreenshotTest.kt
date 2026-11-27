@@ -9,6 +9,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -36,7 +38,7 @@ class FolderAndSettingsScreenScreenshotTest {
 
     @Test
     @Config(sdk = [34], qualifiers = "w360dp-h780dp-xhdpi")
-    fun folderTabRendersStatsScrollbarFloatingMenuAndScrollsToExeOn360dp() {
+    fun folderTabRendersDualPaneSelectionBottomIconsDialogsAndScrollsOn360dp() {
         val viewModel = MainViewModel()
         lateinit var hostView: View
 
@@ -54,6 +56,16 @@ class FolderAndSettingsScreenScreenshotTest {
         composeTestRule.waitForIdle()
 
         assertFolderElementsDisplayed(hostView)
+        listOf(
+            "file_action_rename",
+            "file_action_delete",
+            "file_action_copy",
+            "file_action_info",
+            "file_action_export"
+        ).forEach { tag ->
+            composeTestRule.onNodeWithTag(tag).assertIsNotEnabled()
+        }
+
         composeTestRule.onNodeWithTag("folder_vertical_scrollbar").assertIsDisplayed()
         composeTestRule.onNodeWithTag("folder_scrollbar_thumb").assertIsDisplayed()
 
@@ -65,7 +77,7 @@ class FolderAndSettingsScreenScreenshotTest {
 
         captureHostBitmap(hostView, "folder_360dp.png")
 
-        composeTestRule.onNodeWithTag("folder_lazy_column").performScrollToIndex(9)
+        composeTestRule.onNodeWithTag("folder_lazy_column").performScrollToIndex(8)
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("AliceInCradle.exe").assertIsDisplayed()
@@ -81,6 +93,21 @@ class FolderAndSettingsScreenScreenshotTest {
             "Folder scrollbar thumb must move down on scroll: before=$thumbTopBefore, after=$thumbTopAfter",
             thumbTopAfter > thumbTopBefore
         )
+
+        composeTestRule.onNodeWithTag("folder_checkbox_file-alice-exe").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("选中 1 项文件，约 64.0 MB").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("file_action_info").assertIsEnabled().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("dialog_properties_edit_perm").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("perm_cb_suid").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("perm_cb_recursive").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("dialog_perm_cancel").performClick()
+        composeTestRule.waitForIdle()
 
         captureHostBitmap(hostView, "folder_360dp_scrolled.png")
     }
@@ -165,17 +192,25 @@ class FolderAndSettingsScreenScreenshotTest {
     }
 
     private fun assertFolderElementsDisplayed(hostView: View) {
-        composeTestRule.onNodeWithText("共 3 个文件夹，7 个文件").assertIsDisplayed()
-        composeTestRule.onNodeWithText("共占 37GB").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("folder_current_path").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("folder_target_path").assertIsDisplayed()
         composeTestRule.onNodeWithText("AliceInCradle_Data").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("folder_floating_action_menu").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("folder_selection_summary").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("folder_total_summary").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("file_bottom_action_bar").assertIsDisplayed()
 
-        listOf("info", "Del", "Copy", "Place", "Running").forEach { label ->
-            val node = composeTestRule.onNodeWithTag("folder_action_$label")
+        listOf(
+            "file_action_rename",
+            "file_action_delete",
+            "file_action_copy",
+            "file_action_info",
+            "file_action_export"
+        ).forEach { tag ->
+            val node = composeTestRule.onNodeWithTag(tag)
             node.assertIsDisplayed()
             val bounds = node.fetchSemanticsNode().boundsInRoot
             assertTrue(
-                "Action $label must stay within host width (${hostView.width}): $bounds",
+                "Action $tag must stay within host width (${hostView.width}): $bounds",
                 bounds.right <= hostView.width.toFloat() + 1f
             )
         }
