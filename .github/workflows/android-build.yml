@@ -41,10 +41,3 @@ jobs:
           name: AIC-Launcher-Debug
           path: client/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
-      - name: Upload UI Screenshot artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: AIC-Launcher-Screenshots
-          path: client/android/app/build/reports/screenshots/*.png
-          if-no-files-found: error
