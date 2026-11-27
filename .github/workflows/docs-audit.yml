@@ -2,9 +2,13 @@ name: docs-audit
 
 on:
   push:
+    branches-ignore:
+      - 'nocheck_dev'
     paths:
       - 'docs/**'
   pull_request:
+    branches-ignore:
+      - 'nocheck_dev'
     paths:
       - 'docs/**'
 
