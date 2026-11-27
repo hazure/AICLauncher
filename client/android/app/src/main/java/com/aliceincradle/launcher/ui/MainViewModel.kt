@@ -396,19 +396,40 @@ class MainViewModel @JvmOverloads constructor(
                         target.fileName.ifBlank { "${target.id}.7z" }
                     }
                     val destFile = File(downloadDir, fileName)
-                    downloadQueueManager.enqueue(
-                        DownloadRequest(
-                            itemId = itemId,
-                            url = outcome.source.url,
-                            destFile = destFile,
-                            expectedBytes = outcome.source.sizeBytes ?: target.sizeBytes,
-                            expectedSha256 = outcome.source.sha256,
-                            sourceChannel = com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK,
-                            reResolveUrl = {
-                                (coordinator.start(oldFp = outcome.fp) as? ResolveOutcome.Ready)?.source?.url
-                            }
+                    val useWebViewPrimary = useWebViewPrimaryOverride ?: (appContext != null)
+                    if (useWebViewPrimary) {
+                        updateCatalogItem(itemId) {
+                            it.copy(status = DownloadContentStatus.DOWNLOADING, progressPercent = 0, errorMessage = null)
+                        }
+                        _uiState.update { state ->
+                            state.copy(
+                                downloadPage = state.downloadPage.copy(
+                                    pendingWebViewDownload = com.aliceincradle.launcher.data.WebViewDownloadTask(
+                                        itemId = itemId,
+                                        signedUrl = outcome.source.url,
+                                        destFilePath = destFile.absolutePath,
+                                        expectedBytes = outcome.source.sizeBytes ?: target.sizeBytes,
+                                        expectedSha256 = outcome.source.sha256,
+                                        urlFp = outcome.fp
+                                    )
+                                )
+                            )
+                        }
+                    } else {
+                        downloadQueueManager.enqueue(
+                            DownloadRequest(
+                                itemId = itemId,
+                                url = outcome.source.url,
+                                destFile = destFile,
+                                expectedBytes = outcome.source.sizeBytes ?: target.sizeBytes,
+                                expectedSha256 = outcome.source.sha256,
+                                sourceChannel = com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK,
+                                reResolveUrl = {
+                                    (coordinator.start(oldFp = outcome.fp) as? ResolveOutcome.Ready)?.source?.url
+                                }
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -442,6 +463,92 @@ class MainViewModel @JvmOverloads constructor(
         if (openManualDialog) {
             selectTab(MainTab.SETTINGS)
             openManualShortCodeDialog()
+        }
+    }
+
+    fun onWebViewDownloadProgress(itemId: String, downloadedBytes: Long, totalBytes: Long, percent: Int) {
+        updateCatalogItem(itemId) {
+            it.copy(
+                status = DownloadContentStatus.DOWNLOADING,
+                downloadedBytes = downloadedBytes,
+                sizeBytes = if (totalBytes > 0L) totalBytes else it.sizeBytes,
+                progressPercent = percent
+            )
+        }
+    }
+
+    fun onWebViewDownloadPartReady(partFile: File) {
+        val task = _uiState.value.downloadPage.pendingWebViewDownload ?: return
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingWebViewDownload = null))
+        }
+        probeScope.launch {
+            val destFile = File(task.destFilePath)
+            val res = DownloadQueueManager.verifyMagicAndFinalize(
+                partFile = partFile,
+                destFile = destFile,
+                expectedSha256 = task.expectedSha256,
+                fp = task.urlFp,
+                extractor = archiveExtractor
+            )
+            res.onSuccess { finalized ->
+                updateCatalogItem(task.itemId) {
+                    it.copy(
+                        status = DownloadContentStatus.DOWNLOADED,
+                        progressPercent = 100,
+                        downloadedBytes = finalized.length(),
+                        sizeBytes = finalized.length(),
+                        sizeLabel = formatFileSize(finalized.length()),
+                        localFilePath = finalized.absolutePath,
+                        errorMessage = null
+                    )
+                }
+                refreshFilePanes()
+            }.onFailure { err ->
+                updateCatalogItem(task.itemId) {
+                    it.copy(
+                        status = DownloadContentStatus.FAILED,
+                        errorMessage = err.message ?: "魔数校验失败"
+                    )
+                }
+            }
+        }
+    }
+
+    fun onWebViewDownloadUnavailable(reason: String) {
+        val task = _uiState.value.downloadPage.pendingWebViewDownload ?: return
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingWebViewDownload = null))
+        }
+        downloadQueueManager.enqueue(
+            DownloadRequest(
+                itemId = task.itemId,
+                url = task.signedUrl,
+                destFile = File(task.destFilePath),
+                expectedBytes = task.expectedBytes,
+                expectedSha256 = task.expectedSha256,
+                sourceChannel = com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK
+            )
+        )
+    }
+
+    fun onWebViewDownloadFailed(errorMessage: String) {
+        val task = _uiState.value.downloadPage.pendingWebViewDownload ?: return
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingWebViewDownload = null))
+        }
+        updateCatalogItem(task.itemId) {
+            it.copy(status = DownloadContentStatus.FAILED, errorMessage = errorMessage)
+        }
+    }
+
+    fun cancelWebViewDownload() {
+        val task = _uiState.value.downloadPage.pendingWebViewDownload ?: return
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingWebViewDownload = null))
+        }
+        updateCatalogItem(task.itemId) {
+            it.copy(status = DownloadContentStatus.AVAILABLE, progressPercent = 0, downloadedBytes = 0L, errorMessage = null)
         }
     }
 

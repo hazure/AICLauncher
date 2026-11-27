@@ -360,6 +360,17 @@ fun MainScreen(viewModel: MainViewModel) {
             onDismiss = { viewModel.onShortCodeCaptureCancelled(openManualDialog = false) }
         )
     }
+
+    uiState.downloadPage.pendingWebViewDownload?.let { wvTask ->
+        WebViewDownloadDialog(
+            task = wvTask,
+            onProgress = { dl, total, pct -> viewModel.onWebViewDownloadProgress(wvTask.itemId, dl, total, pct) },
+            onPartFileReady = { part -> viewModel.onWebViewDownloadPartReady(part) },
+            onWebViewUnavailable = { reason -> viewModel.onWebViewDownloadUnavailable(reason) },
+            onFailed = { err -> viewModel.onWebViewDownloadFailed(err) },
+            onCancel = { viewModel.cancelWebViewDownload() }
+        )
+    }
 }
 
 @Composable

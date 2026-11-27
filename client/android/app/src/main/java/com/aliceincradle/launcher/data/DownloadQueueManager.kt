@@ -120,7 +120,6 @@ open class RemoteCatalogFetcher(
             val isDownloaded = localFile != null && localFile.exists() && localFile.length() > 0L
             val status = when {
                 isDownloaded -> DownloadContentStatus.DOWNLOADED
-                downloadUrl.isBlank() -> DownloadContentStatus.DISABLED
                 else -> DownloadContentStatus.AVAILABLE
             }
             result += DownloadCatalogItem(
@@ -341,38 +340,12 @@ class DownloadQueueManager(
                             }
                         }
 
-                        // Integrity & Magic check (D4/D5)
-                        val container = ArchiveExtractor().detectContainer(partFile)
-                        runCatching {
-                            Log.i(
-                                "AICL_PIPELINE",
-                                "VERIFYING_MAGIC container=$container bytes=${partFile.length()} fp=$currentFp"
-                            )
-                        }
-                        if (container == ArchiveContainer.CF_CHALLENGE_HTML) {
-                            partFile.delete()
-                            throw IOException("CF_CHALLENGE_HTML: 命中 Cloudflare 挑战页，非压缩包文件")
-                        }
-                        if (container == ArchiveContainer.UNKNOWN) {
-                            partFile.delete()
-                            throw IOException("NOT_ARCHIVE: 下载产物非有效 7z/zip 压缩包")
-                        }
-                        val expectedSha = request.expectedSha256
-                        if (!expectedSha.isNullOrBlank()) {
-                            val actualSha = computeSha256(partFile)
-                            if (!actualSha.equals(expectedSha, ignoreCase = true)) {
-                                partFile.delete()
-                                throw IOException("CHECKSUM_MISMATCH: 文件哈希校验失败")
-                            }
-                        }
-
-                        if (request.destFile.exists()) {
-                            request.destFile.delete()
-                        }
-                        if (!partFile.renameTo(request.destFile)) {
-                            partFile.copyTo(request.destFile, overwrite = true)
-                            partFile.delete()
-                        }
+                        verifyMagicAndFinalize(
+                            partFile = partFile,
+                            destFile = request.destFile,
+                            expectedSha256 = request.expectedSha256,
+                            fp = currentFp
+                        ).getOrThrow()
                         listener.onProgress(request.itemId, downloaded, totalBytes.coerceAtLeast(downloaded), 100)
                         listener.onCompleted(request.itemId, request.destFile)
                         return
@@ -437,6 +410,48 @@ class DownloadQueueManager(
                 } finally {
                     conn.disconnect()
                 }
+            }
+        }
+
+        fun verifyMagicAndFinalize(
+            partFile: File,
+            destFile: File,
+            expectedSha256: String?,
+            fp: String,
+            extractor: ArchiveExtractor = ArchiveExtractor()
+        ): Result<File> {
+            return runCatching {
+                val container = extractor.detectContainer(partFile)
+                runCatching {
+                    Log.i(
+                        "AICL_PIPELINE",
+                        "VERIFYING_MAGIC container=$container bytes=${partFile.length()} fp=$fp"
+                    )
+                }
+                if (container == ArchiveContainer.CF_CHALLENGE_HTML) {
+                    partFile.delete()
+                    throw IOException("CF_CHALLENGE_HTML: 命中 Cloudflare 挑战页，非压缩包文件")
+                }
+                if (container == ArchiveContainer.UNKNOWN) {
+                    partFile.delete()
+                    throw IOException("NOT_ARCHIVE: 下载产物非有效 7z/zip 压缩包")
+                }
+                if (!expectedSha256.isNullOrBlank()) {
+                    val actualSha = computeSha256(partFile)
+                    if (!actualSha.equals(expectedSha256, ignoreCase = true)) {
+                        partFile.delete()
+                        throw IOException("CHECKSUM_MISMATCH: 文件哈希校验失败")
+                    }
+                }
+                destFile.parentFile?.mkdirs()
+                if (destFile.exists()) {
+                    destFile.delete()
+                }
+                if (!partFile.renameTo(destFile)) {
+                    partFile.copyTo(destFile, overwrite = true)
+                    partFile.delete()
+                }
+                destFile
             }
         }
 
