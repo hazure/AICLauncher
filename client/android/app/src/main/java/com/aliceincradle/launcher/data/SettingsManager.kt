@@ -34,7 +34,7 @@ data class SettingsData(
     val logLevel: String = "INFO",
     val isDevModeUnlocked: Boolean = false,
     val forceSoftwareRendering: Boolean = false,
-    val versionName: String = "0.1.0a"
+    val versionName: String = "0.1.0b"
 )
 
 /**
