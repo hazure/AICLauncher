@@ -478,7 +478,7 @@ class MainViewModel @JvmOverloads constructor(
             val resolvedPath = if (folder.activePane == FilePaneSide.LEFT) {
                 pathProvider.buildItemPath(target.name, appContext)
             } else {
-                "${folder.targetPath}/${target.name}"
+                pathProvider.buildTargetItemPath(target.name, appContext)
             }
             state.copy(
                 folderPage = folder.copy(

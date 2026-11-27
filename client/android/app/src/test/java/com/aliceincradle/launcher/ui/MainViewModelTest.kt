@@ -207,10 +207,14 @@ class MainViewModelTest {
         // Switching to RIGHT pane selects target directory items independently and copies back to LEFT path
         vm.toggleFileSelection(FilePaneSide.RIGHT, "dst-dll-unity")
         assertEquals(FilePaneSide.RIGHT, vm.uiState.value.folderPage.activePane)
+        assertEquals("共 6 个文件，4 个文件夹", vm.uiState.value.folderPage.totalCountSummaryText)
         assertEquals(1, vm.uiState.value.folderPage.selectedCount)
         assertEquals(DefaultPathProvider.DEFAULT_CURRENT_DIR, vm.uiState.value.folderPage.activeDestinationPath)
         vm.startCopySelectedFiles()
         assertTrue(vm.uiState.value.folderPage.actionNotice?.contains(DefaultPathProvider.DEFAULT_CURRENT_DIR) == true)
+
+        vm.selectFilePane(FilePaneSide.LEFT)
+        assertEquals("共 5 个文件，3 个文件夹", vm.uiState.value.folderPage.totalCountSummaryText)
     }
 
     @Test

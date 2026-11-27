@@ -358,6 +358,7 @@ private fun FilePaneColumn(
                     items(items = items, key = { it.id }) { item ->
                         FilePaneRow(
                             item = item,
+                            isPaneActive = isActive,
                             onClick = { onRowClick(item.id) }
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -381,12 +382,13 @@ private fun FilePaneColumn(
 @Composable
 private fun FilePaneRow(
     item: FileItem,
+    isPaneActive: Boolean,
     onClick: () -> Unit
 ) {
-    val bgColor = if (item.isSelected) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-    } else {
-        Color.Transparent
+    val bgColor = when {
+        item.isSelected && isPaneActive -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        item.isSelected -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+        else -> Color.Transparent
     }
 
     Surface(
@@ -443,7 +445,11 @@ private fun FilePaneRow(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = "已选中",
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = if (isPaneActive) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             modifier = Modifier
                                 .size(14.dp)
                                 .testTag("folder_item_selected_${item.id}")

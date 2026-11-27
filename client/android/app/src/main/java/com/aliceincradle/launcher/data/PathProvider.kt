@@ -16,6 +16,7 @@ interface PathProvider {
     fun targetDirectoryLabel(context: Context? = null): String
     fun downloadExportTargets(context: Context? = null): List<ExportTarget>
     fun buildItemPath(itemName: String, context: Context? = null): String
+    fun buildTargetItemPath(itemName: String, context: Context? = null): String
 }
 
 /**
@@ -67,6 +68,10 @@ class DefaultPathProvider(
 
     override fun buildItemPath(itemName: String, context: Context?): String {
         return "${currentDirectoryLabel(context)}${File.separator}$itemName"
+    }
+
+    override fun buildTargetItemPath(itemName: String, context: Context?): String {
+        return "${targetDirectoryLabel(context)}${File.separator}$itemName"
     }
 
     private fun resolveDownloadDisplayRoot(context: Context?): String {
