@@ -118,7 +118,7 @@ fun DownloadScreen(
             }
         }
 
-        state.mirrorSniffError?.let { errorMsg ->
+        state.catalogError?.let { errorMsg ->
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -138,11 +138,19 @@ fun DownloadScreen(
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
-                    OutlinedButton(
-                        onClick = onOpenCienFallback,
-                        modifier = Modifier.testTag("download_cien_fallback_button")
-                    ) {
-                        Text(text = "前往官方 ci-en 发布页")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = onRefreshCatalog,
+                            modifier = Modifier.testTag("download_retry_catalog_button")
+                        ) {
+                            Text(text = "重试")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenCienFallback,
+                            modifier = Modifier.testTag("download_cien_fallback_button")
+                        ) {
+                            Text(text = "前往官方 ci-en 发布页")
+                        }
                     }
                 }
             }
@@ -348,7 +356,6 @@ private fun DownloadCatalogRowCard(
     val (statusIcon, statusTint, statusDesc) = when (item.status) {
         DownloadContentStatus.DOWNLOADED -> Triple(Icons.Default.Check, Color(0xFF2E7D32), "已下载")
         DownloadContentStatus.AVAILABLE -> Triple(Icons.Default.Download, Color(0xFF1565C0), "可下载")
-        DownloadContentStatus.PREPARING,
         DownloadContentStatus.QUEUED,
         DownloadContentStatus.DOWNLOADING -> Triple(Icons.Default.Download, Color(0xFFEF6C00), "下载中")
         DownloadContentStatus.FAILED -> Triple(Icons.Default.ErrorOutline, Color(0xFFC62828), "下载失败")
@@ -392,9 +399,7 @@ private fun DownloadCatalogRowCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (item.status == DownloadContentStatus.PREPARING) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                } else if (item.status == DownloadContentStatus.DOWNLOADING || item.status == DownloadContentStatus.QUEUED) {
+                if (item.status == DownloadContentStatus.DOWNLOADING || item.status == DownloadContentStatus.QUEUED) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -438,7 +443,6 @@ private fun DownloadCatalogRowCard(
                         canOpenDownloaded
                     val actionLabel = when (item.status) {
                         DownloadContentStatus.DOWNLOADED -> if (canOpenDownloaded) "安装/查看" else "已下载"
-                        DownloadContentStatus.PREPARING -> "准备中..."
                         DownloadContentStatus.QUEUED -> "排队中"
                         DownloadContentStatus.DOWNLOADING -> "下载中 ${item.progressPercent}%"
                         DownloadContentStatus.FAILED -> "重试"

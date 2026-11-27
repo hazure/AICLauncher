@@ -19,7 +19,6 @@ import com.aliceincradle.launcher.data.FileManagerDialog
 import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderPageState
 import com.aliceincradle.launcher.data.MaintenanceManager
-import com.aliceincradle.launcher.data.MirrorLinkSniffer
 import com.aliceincradle.launcher.data.PathProvider
 import com.aliceincradle.launcher.data.PosixPermissions
 import com.aliceincradle.launcher.data.RealFileSystemRepository
@@ -34,7 +33,6 @@ import com.aliceincradle.launcher.data.formatFileSize
 import com.aliceincradle.launcher.data.validateEnvVars
 import java.io.File
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -89,8 +87,7 @@ class MainViewModel @JvmOverloads constructor(
     private val catalogFetcher: RemoteCatalogFetcher = RemoteCatalogFetcher(),
     private val maintenanceManager: MaintenanceManager = MaintenanceManager(),
     downloadQueueManagerOverride: DownloadQueueManager? = null,
-    autoFetchCatalog: Boolean = true,
-    private val mirrorLinkSniffer: MirrorLinkSniffer = MirrorLinkSniffer()
+    autoFetchCatalog: Boolean = true
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -101,7 +98,6 @@ class MainViewModel @JvmOverloads constructor(
     private val probeScope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val refreshMutex = Mutex()
     private var fileOpJob: Job? = null
-    private val mirrorSniffJobs = ConcurrentHashMap<String, Job>()
 
     private val downloadQueueManager: DownloadQueueManager = downloadQueueManagerOverride
         ?: DownloadQueueManager(scope = probeScope, ioDispatcher = ioDispatcher, workerCount = 2)
@@ -268,17 +264,9 @@ class MainViewModel @JvmOverloads constructor(
 
     fun refreshDownloadCatalog() {
         val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
-        val mirrorItem = buildOfficialMirrorItem(downloadDir)
         _uiState.update { state ->
-            val currentAll = if (state.downloadPage.allItems.any { it.isMirrorSniffTarget }) {
-                state.downloadPage.allItems
-            } else {
-                listOf(mirrorItem) + state.downloadPage.allItems
-            }
             state.copy(
                 downloadPage = state.downloadPage.copy(
-                    allItems = currentAll,
-                    items = DownloadCatalogFilter.filterItems(currentAll, state.downloadPage.filter),
                     isLoadingCatalog = true,
                     catalogError = null,
                     statsText = "正在拉取远端资源列表..."
@@ -290,65 +278,32 @@ class MainViewModel @JvmOverloads constructor(
             val result = catalogFetcher.fetchCatalog(downloadDir)
             val elapsedSec = (System.currentTimeMillis() - startMs).coerceAtLeast(1L) / 1000.0
             result.onSuccess { fetched ->
-                val combined = listOf(buildOfficialMirrorItem(downloadDir)) + fetched
                 _uiState.update { state ->
-                    val filtered = DownloadCatalogFilter.filterItems(combined, state.downloadPage.filter)
+                    val filtered = DownloadCatalogFilter.filterItems(fetched, state.downloadPage.filter)
                     state.copy(
                         downloadPage = state.downloadPage.copy(
-                            allItems = combined,
+                            allItems = fetched,
                             items = filtered,
                             isLoadingCatalog = false,
                             catalogError = null,
-                            statsText = String.format(Locale.US, "共 %d 个内容，耗时 %.2fs", combined.size, elapsedSec)
+                            statsText = String.format(Locale.US, "共 %d 个内容，耗时 %.2fs", fetched.size, elapsedSec)
                         )
                     )
                 }
-            }.onFailure { err ->
+            }.onFailure {
                 _uiState.update { state ->
-                    val fallbackList = listOf(buildOfficialMirrorItem(downloadDir))
-                    val filtered = DownloadCatalogFilter.filterItems(fallbackList, state.downloadPage.filter)
                     state.copy(
                         downloadPage = state.downloadPage.copy(
-                            allItems = fallbackList,
-                            items = filtered,
+                            allItems = emptyList(),
+                            items = emptyList(),
                             isLoadingCatalog = false,
-                            catalogError = err.message ?: "网络请求失败",
-                            statsText = "官方镜像就绪；GitHub 列表拉取失败：${err.message ?: "未知错误"}"
+                            catalogError = "索引获取失败，请检查网络或稍后重试",
+                            statsText = "索引获取失败，请检查网络或稍后重试"
                         )
                     )
                 }
             }
         }
-    }
-
-    private fun buildOfficialMirrorItem(downloadDir: File?): DownloadCatalogItem {
-        val existingFile = downloadDir?.listFiles()?.firstOrNull { file ->
-            file.isFile && file.length() > 0L && (
-                file.name.equals("AliceInCradle_Win_Latest.zip", ignoreCase = true) ||
-                    file.name.startsWith("AliceInCradle", ignoreCase = true) &&
-                    (file.name.endsWith(".zip", true) || file.name.endsWith(".7z", true))
-                )
-        }
-        return DownloadCatalogItem(
-            id = OFFICIAL_MIRROR_ITEM_ID,
-            title = "Alice In Cradle · Windows 最新版（官方镜像站）",
-            tags = listOf("游戏本体", "官方镜像", "动态解析"),
-            sizeLabel = existingFile?.let { formatFileSize(it.length()) } ?: "动态大小",
-            sizeBytes = existingFile?.length() ?: 0L,
-            status = if (existingFile != null) DownloadContentStatus.DOWNLOADED else DownloadContentStatus.AVAILABLE,
-            appName = "AIC",
-            versionChannel = "稳定版",
-            category = "游戏本体",
-            isCompatibleVersion = true,
-            isFeatured = true,
-            author = "NanameHacha",
-            description = "点击下载时实时请求 get.aliceincradle.dev/win/ 动态解析最新压缩包直链并流式下载。",
-            downloadUrl = "",
-            fileName = existingFile?.name ?: "AliceInCradle_Win_Latest.zip",
-            localFilePath = existingFile?.absolutePath,
-            progressPercent = if (existingFile != null) 100 else 0,
-            isMirrorSniffTarget = true
-        )
     }
 
     fun updateDownloadQuery(query: String) {
@@ -378,69 +333,15 @@ class MainViewModel @JvmOverloads constructor(
     fun triggerCatalogDownload(itemId: String) {
         val target = _uiState.value.downloadPage.allItems.find { it.id == itemId } ?: return
         if (target.status == DownloadContentStatus.DISABLED ||
-            target.status == DownloadContentStatus.PREPARING ||
             target.status == DownloadContentStatus.QUEUED ||
-            target.status == DownloadContentStatus.DOWNLOADING
+            target.status == DownloadContentStatus.DOWNLOADING ||
+            target.downloadUrl.isBlank()
         ) {
             return
         }
 
         val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
-        if (target.isMirrorSniffTarget) {
-            _uiState.update { state ->
-                state.copy(downloadPage = state.downloadPage.copy(mirrorSniffError = null))
-            }
-            updateCatalogItem(itemId) {
-                it.copy(
-                    status = DownloadContentStatus.PREPARING,
-                    progressPercent = 0,
-                    downloadedBytes = 0L,
-                    errorMessage = null
-                )
-            }
-            val sniffJob = probeScope.launch {
-                val sniffResult = mirrorLinkSniffer.sniffLatestWinLink(appContext)
-                sniffResult.onSuccess { sniffed ->
-                    val destFile = File(downloadDir, sniffed.fileName)
-                    updateCatalogItem(itemId) {
-                        it.copy(
-                            status = DownloadContentStatus.QUEUED,
-                            downloadUrl = sniffed.directUrl,
-                            fileName = sniffed.fileName,
-                            errorMessage = null
-                        )
-                    }
-                    downloadQueueManager.enqueue(
-                        DownloadRequest(
-                            itemId = itemId,
-                            url = sniffed.directUrl,
-                            destFile = destFile,
-                            expectedBytes = target.sizeBytes
-                        )
-                    )
-                }.onFailure { err ->
-                    _uiState.update { state ->
-                        state.copy(
-                            downloadPage = state.downloadPage.copy(
-                                mirrorSniffError = "链接解析失败，请检查网络环境"
-                            )
-                        )
-                    }
-                    updateCatalogItem(itemId) {
-                        it.copy(
-                            status = DownloadContentStatus.FAILED,
-                            errorMessage = err.message ?: "链接解析失败，请检查网络环境"
-                        )
-                    }
-                }
-                mirrorSniffJobs.remove(itemId)
-            }
-            mirrorSniffJobs[itemId] = sniffJob
-            return
-        }
-
-        if (target.downloadUrl.isBlank()) return
-        val fileName = target.fileName.ifBlank { "${target.id}.bin" }
+        val fileName = target.fileName.ifBlank { "${target.id}.zip" }
         val destFile = File(downloadDir, fileName)
 
         updateCatalogItem(itemId) {
@@ -462,7 +363,6 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     fun cancelCatalogDownload(itemId: String) {
-        mirrorSniffJobs.remove(itemId)?.cancel()
         downloadQueueManager.cancel(itemId)
         updateCatalogItem(itemId) {
             it.copy(
@@ -472,10 +372,6 @@ class MainViewModel @JvmOverloads constructor(
                 errorMessage = null
             )
         }
-    }
-
-    companion object {
-        const val OFFICIAL_MIRROR_ITEM_ID = "aic-win-official-mirror"
     }
 
     fun openCatalogItemDetail(item: DownloadCatalogItem) {

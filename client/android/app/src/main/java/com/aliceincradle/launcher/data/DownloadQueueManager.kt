@@ -7,6 +7,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLDecoder
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
@@ -61,25 +62,16 @@ open class RemoteCatalogFetcher(
     private val httpClient: CatalogHttpClient = DefaultCatalogHttpClient()
 ) {
     open fun fetchCatalog(downloadDir: File?): Result<List<DownloadCatalogItem>> {
-        val errors = mutableListOf<String>()
-
-        runCatching {
-            val rawJson = httpClient.fetchText(RAW_CATALOG_URL)
-            parseCatalogJson(rawJson, downloadDir)
-        }.onSuccess { items ->
-            if (items.isNotEmpty()) {
-                return Result.success(items)
-            }
-        }.onFailure { err ->
-            errors += "catalog.json: ${err.message}"
-        }
-
         return runCatching {
-            val releasesJson = httpClient.fetchText(GITHUB_RELEASES_URL)
-            parseGitHubReleases(releasesJson, downloadDir)
-        }.onFailure { err ->
-            errors += "releases: ${err.message}"
-            SafeProbeIo.warn(TAG, "Remote catalog fetch failed: ${errors.joinToString("; ")}", err)
+            val rawJson = httpClient.fetchText(RAW_CATALOG_URL)
+            val items = parseCatalogJson(rawJson, downloadDir)
+            if (items.isEmpty()) {
+                throw IOException("索引获取失败，请检查网络或稍后重试")
+            }
+            items
+        }.recoverCatching { err ->
+            SafeProbeIo.warn(TAG, "Remote catalog fetch failed: ${err.message}", err)
+            throw IOException("索引获取失败，请检查网络或稍后重试", err)
         }
     }
 
@@ -88,24 +80,33 @@ open class RemoteCatalogFetcher(
         val array = if (trimmed.startsWith("[")) {
             JSONArray(trimmed)
         } else {
-            JSONObject(trimmed).optJSONArray("items") ?: JSONArray()
+            val obj = JSONObject(trimmed)
+            obj.optJSONArray("resources") ?: obj.optJSONArray("items") ?: JSONArray()
         }
         val result = mutableListOf<DownloadCatalogItem>()
         for (i in 0 until array.length()) {
             val obj = array.optJSONObject(i) ?: continue
             val id = obj.optString("id").ifBlank { "remote-item-$i" }
-            val title = obj.optString("title").ifBlank { id }
-            val downloadUrl = obj.optString("downloadUrl", obj.optString("url", ""))
-            val fileName = obj.optString("fileName").ifBlank {
-                downloadUrl.substringAfterLast('/').substringBefore('?').ifBlank { "$id.bin" }
+            val title = obj.optString("name", obj.optString("title")).ifBlank { id }
+            val downloadUrl = obj.optString("download_url", obj.optString("downloadUrl", obj.optString("url", "")))
+            val rawFileName = obj.optString("fileName").ifBlank {
+                downloadUrl.substringAfterLast('/').substringBefore('?').ifBlank { "$id.zip" }
             }
+            val fileName = runCatching { URLDecoder.decode(rawFileName, "UTF-8") }.getOrDefault(rawFileName)
             val sizeBytes = obj.optLong("sizeBytes", 0L)
+            val sizeText = obj.optString("size", obj.optString("sizeLabel", ""))
+            val version = obj.optString("version", "")
             val tagsArray = obj.optJSONArray("tags")
             val tags = buildList {
                 if (tagsArray != null) {
                     for (t in 0 until tagsArray.length()) {
                         tagsArray.optString(t).takeIf { it.isNotBlank() }?.let(::add)
                     }
+                }
+                if (isEmpty()) {
+                    add("游戏本体")
+                    if (version.isNotBlank()) add("v$version")
+                    add("稳定版")
                 }
             }
             val localFile = downloadDir?.let { File(it, fileName) }
@@ -118,16 +119,20 @@ open class RemoteCatalogFetcher(
             result += DownloadCatalogItem(
                 id = id,
                 title = title,
-                tags = tags.ifEmpty { listOf("远端资源") },
-                sizeLabel = if (sizeBytes > 0L) formatFileSize(sizeBytes) else obj.optString("sizeLabel", "未知大小"),
+                tags = tags,
+                sizeLabel = when {
+                    sizeBytes > 0L -> formatFileSize(sizeBytes)
+                    sizeText.isNotBlank() -> sizeText
+                    else -> "未知大小"
+                },
                 sizeBytes = sizeBytes,
                 status = status,
                 appName = obj.optString("appName", "AIC"),
                 versionChannel = obj.optString("versionChannel", "稳定版"),
                 category = obj.optString("category", "游戏本体"),
                 isCompatibleVersion = obj.optBoolean("isCompatibleVersion", true),
-                isFeatured = obj.optBoolean("isFeatured", false),
-                author = obj.optString("author", "hazure"),
+                isFeatured = obj.optBoolean("isFeatured", true),
+                author = obj.optString("author", "NanameHacha@Cicini"),
                 description = obj.optString("description", ""),
                 downloadUrl = downloadUrl,
                 fileName = fileName,
@@ -138,88 +143,9 @@ open class RemoteCatalogFetcher(
         return result
     }
 
-    internal fun parseGitHubReleases(rawJson: String, downloadDir: File?): List<DownloadCatalogItem> {
-        val releases = JSONArray(rawJson.trim())
-        val items = mutableListOf<DownloadCatalogItem>()
-        for (i in 0 until releases.length()) {
-            val rel = releases.optJSONObject(i) ?: continue
-            val tagName = rel.optString("tag_name", "release-$i")
-            val relName = rel.optString("name").ifBlank { tagName }
-            val isPrerelease = rel.optBoolean("prerelease", false)
-            val channel = if (isPrerelease) "测试版" else "稳定版"
-            val author = rel.optJSONObject("author")?.optString("login").orEmpty().ifBlank { "hazure" }
-            val body = rel.optString("body", "").take(300)
-            val assets = rel.optJSONArray("assets")
-
-            if (assets != null && assets.length() > 0) {
-                for (a in 0 until assets.length()) {
-                    val asset = assets.optJSONObject(a) ?: continue
-                    val assetName = asset.optString("name").ifBlank { "$tagName-asset-$a" }
-                    val url = asset.optString("browser_download_url", "")
-                    val sizeBytes = asset.optLong("size", 0L)
-                    val localFile = downloadDir?.let { File(it, assetName) }
-                    val isDownloaded = localFile != null && localFile.exists() && localFile.length() > 0L
-                    items += DownloadCatalogItem(
-                        id = "gh-${rel.optLong("id", i.toLong())}-$a",
-                        title = "$relName · $assetName",
-                        tags = listOf(channel, tagName, "GitHub Release"),
-                        sizeLabel = if (sizeBytes > 0L) formatFileSize(sizeBytes) else "未知大小",
-                        sizeBytes = sizeBytes,
-                        status = when {
-                            isDownloaded -> DownloadContentStatus.DOWNLOADED
-                            url.isBlank() -> DownloadContentStatus.DISABLED
-                            else -> DownloadContentStatus.AVAILABLE
-                        },
-                        appName = "AIC",
-                        versionChannel = channel,
-                        category = if (assetName.endsWith(".apk", true)) "游戏本体" else "武器强化",
-                        isCompatibleVersion = true,
-                        isFeatured = i == 0,
-                        author = author,
-                        description = body,
-                        downloadUrl = url,
-                        fileName = assetName,
-                        localFilePath = if (isDownloaded) localFile?.absolutePath else null,
-                        progressPercent = if (isDownloaded) 100 else 0
-                    )
-                }
-            } else {
-                val zipUrl = rel.optString("zipball_url", "")
-                val fileName = "AICLauncher-${tagName.replace('/', '_')}.zip"
-                val localFile = downloadDir?.let { File(it, fileName) }
-                val isDownloaded = localFile != null && localFile.exists() && localFile.length() > 0L
-                items += DownloadCatalogItem(
-                    id = "gh-src-${rel.optLong("id", i.toLong())}",
-                    title = "$relName (Source Archive)",
-                    tags = listOf(channel, tagName, "源码归档"),
-                    sizeLabel = "动态大小",
-                    sizeBytes = 0L,
-                    status = when {
-                        isDownloaded -> DownloadContentStatus.DOWNLOADED
-                        zipUrl.isBlank() -> DownloadContentStatus.DISABLED
-                        else -> DownloadContentStatus.AVAILABLE
-                    },
-                    appName = "AIC",
-                    versionChannel = channel,
-                    category = "游戏本体",
-                    isCompatibleVersion = true,
-                    isFeatured = i == 0,
-                    author = author,
-                    description = body,
-                    downloadUrl = zipUrl,
-                    fileName = fileName,
-                    localFilePath = if (isDownloaded) localFile?.absolutePath else null,
-                    progressPercent = if (isDownloaded) 100 else 0
-                )
-            }
-        }
-        return items
-    }
-
     companion object {
         private const val TAG = "RemoteCatalogFetcher"
-        const val RAW_CATALOG_URL = "https://raw.githubusercontent.com/hazure/AICLauncher/main/catalog.json"
-        const val GITHUB_RELEASES_URL = "https://api.github.com/repos/hazure/AICLauncher/releases"
+        const val RAW_CATALOG_URL = "https://raw.githubusercontent.com/hazure/AICLauncher/nocheck_dev/catalog.json"
     }
 }
 
@@ -313,6 +239,9 @@ class DownloadQueueManager(
         private const val TAG = "DownloadQueueManager"
         private const val BUFFER_SIZE = 16 * 1024
         private const val PROGRESS_EMIT_INTERVAL_MS = 120L
+        const val CIEN_FALLBACK_URL = "https://ci-en.dlsite.com/creator/12611"
+        const val CHROME_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
         fun resolveDownloadDirectory(context: Context?): File {
             if (context != null) {
@@ -339,7 +268,7 @@ class DownloadQueueManager(
                 connectTimeout = 15_000
                 readTimeout = 20_000
                 instanceFollowRedirects = true
-                setRequestProperty("User-Agent", MirrorLinkSniffer.CHROME_USER_AGENT)
+                setRequestProperty("User-Agent", CHROME_USER_AGENT)
             }
             try {
                 val code = conn.responseCode

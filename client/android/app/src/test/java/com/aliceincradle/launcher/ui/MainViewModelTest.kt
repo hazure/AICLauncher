@@ -7,8 +7,6 @@ import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadQueueManager
 import com.aliceincradle.launcher.data.FileManagerDialog
 import com.aliceincradle.launcher.data.FilePaneSide
-import com.aliceincradle.launcher.data.MirrorHttpClient
-import com.aliceincradle.launcher.data.MirrorLinkSniffer
 import com.aliceincradle.launcher.data.PosixPermissions
 import com.aliceincradle.launcher.data.RemoteCatalogFetcher
 import com.aliceincradle.launcher.data.SettingsManager
@@ -101,9 +99,8 @@ class MainViewModelTest {
         )
 
         val initialPage = vm.uiState.value.downloadPage
-        assertEquals(3, initialPage.allItems.size)
-        assertTrue(initialPage.allItems.first().isMirrorSniffTarget)
-        assertTrue(initialPage.statsText.contains("共 3 个内容"))
+        assertEquals(2, initialPage.allItems.size)
+        assertTrue(initialPage.statsText.contains("共 2 个内容"))
 
         vm.updateDownloadQuery("Legacy Relic")
         assertEquals(1, vm.uiState.value.downloadPage.items.size)
@@ -300,39 +297,20 @@ class MainViewModelTest {
     }
 
     @Test
-    fun mirrorLinkSnifferExtractsArchiveUrlFromScriptAndHandlesFailureGracefully() = runBlocking {
-        val htmlWithScript = """
-            <html><head><script src="/_js/app.1234.js"></script></head></html>
-        """.trimIndent()
-        val jsPayload = """
-            const dl = "https://cdn.example.com/files/AliceInCradle_ver0.30a.7z?token=abc";
-        """.trimIndent()
-        val sniffer = MirrorLinkSniffer(
-            httpClient = MirrorHttpClient { url ->
-                if (url.endsWith(".js")) jsPayload else htmlWithScript
-            }
-        )
-        val ok = sniffer.sniffLatestWinLink()
-        assertTrue(ok.isSuccess)
-        assertEquals("AliceInCradle_ver0.30a.7z", ok.getOrThrow().fileName)
-        assertEquals(
-            "https://cdn.example.com/files/AliceInCradle_ver0.30a.7z?token=abc",
-            ok.getOrThrow().directUrl
-        )
-
-        val failingSniffer = MirrorLinkSniffer(
-            httpClient = MirrorHttpClient { throw java.io.IOException("network down") }
-        )
+    fun remoteCatalogFailureShowsClearRetryPromptWithoutCrashing() {
+        val failingFetcher = object : RemoteCatalogFetcher(CatalogHttpClient { throw java.io.IOException("HTTP 404") }) {
+            override fun fetchCatalog(downloadDir: File?) =
+                Result.failure<List<com.aliceincradle.launcher.data.DownloadCatalogItem>>(
+                    java.io.IOException("索引获取失败，请检查网络或稍后重试")
+                )
+        }
         val vm = MainViewModel(
             ioDispatcher = Dispatchers.Unconfined,
             autoStartPolling = false,
-            autoFetchCatalog = false,
-            mirrorLinkSniffer = failingSniffer
+            catalogFetcher = failingFetcher,
+            autoFetchCatalog = true
         )
-        vm.refreshDownloadCatalog()
-        vm.triggerCatalogDownload(MainViewModel.OFFICIAL_MIRROR_ITEM_ID)
-        assertEquals("链接解析失败，请检查网络环境", vm.uiState.value.downloadPage.mirrorSniffError)
-        val mirrorItem = vm.uiState.value.downloadPage.allItems.first { it.id == MainViewModel.OFFICIAL_MIRROR_ITEM_ID }
-        assertEquals(DownloadContentStatus.FAILED, mirrorItem.status)
+        assertEquals("索引获取失败，请检查网络或稍后重试", vm.uiState.value.downloadPage.catalogError)
+        assertTrue(vm.uiState.value.downloadPage.items.isEmpty())
     }
 }

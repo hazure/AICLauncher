@@ -4,7 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.core.content.FileProvider
-import com.aliceincradle.launcher.data.MirrorLinkSniffer
+import com.aliceincradle.launcher.data.DownloadQueueManager
 import java.io.File
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -155,7 +155,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     runCatching {
                         val intent = Intent(
                             Intent.ACTION_VIEW,
-                            Uri.parse(MirrorLinkSniffer.CIEN_FALLBACK_URL)
+                            Uri.parse(DownloadQueueManager.CIEN_FALLBACK_URL)
                         )
                         context.startActivity(intent)
                     }.onFailure {
