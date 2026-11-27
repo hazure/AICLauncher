@@ -168,19 +168,35 @@ class Arm64PaintShadow : ShadowPaint() {
 
     @Implementation
     override fun measureText(text: String): Float =
-        BitmapFontMetrics.measure(text, 0, text.length, effectiveTextSize(), super.getTextScaleX())
+        if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(text, 0, text.length, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(text, 0, text.length, effectiveTextSize(), super.getTextScaleX())
+        }
 
     @Implementation
     override fun measureText(text: String, start: Int, end: Int): Float =
-        BitmapFontMetrics.measure(text, start, end, effectiveTextSize(), super.getTextScaleX())
+        if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(text, start, end, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(text, start, end, effectiveTextSize(), super.getTextScaleX())
+        }
 
     @Implementation
     override fun measureText(text: CharSequence, start: Int, end: Int): Float =
-        BitmapFontMetrics.measure(text, start, end, effectiveTextSize(), super.getTextScaleX())
+        if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(text, start, end, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(text, start, end, effectiveTextSize(), super.getTextScaleX())
+        }
 
     @Implementation
     override fun measureText(text: CharArray, index: Int, count: Int): Float =
-        BitmapFontMetrics.measure(text, index, index + count, effectiveTextSize(), super.getTextScaleX())
+        if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(text, index, index + count, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(text, index, index + count, effectiveTextSize(), super.getTextScaleX())
+        }
 
     @Implementation
     fun getTextWidths(text: String, widths: FloatArray): Int =
@@ -213,7 +229,11 @@ class Arm64PaintShadow : ShadowPaint() {
         if (advances != null) {
             fillCharArrayAdvances(chars, index, index + count, advances, advancesIndex)
         }
-        return BitmapFontMetrics.measure(chars, index, index + count, effectiveTextSize(), super.getTextScaleX())
+        return if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(chars, index, index + count, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(chars, index, index + count, effectiveTextSize(), super.getTextScaleX())
+        }
     }
 
     @Implementation
@@ -228,7 +248,11 @@ class Arm64PaintShadow : ShadowPaint() {
         offset: Int
     ): Float {
         val clampedEnd = offset.coerceIn(start, end)
-        return BitmapFontMetrics.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        return if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        }
     }
 
     @Implementation
@@ -243,7 +267,11 @@ class Arm64PaintShadow : ShadowPaint() {
         offset: Int
     ): Float {
         val clampedEnd = offset.coerceIn(start, end)
-        return BitmapFontMetrics.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        return if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        }
     }
 
     @Implementation
@@ -263,7 +291,11 @@ class Arm64PaintShadow : ShadowPaint() {
             fillCharArrayAdvances(text, start, end, advances, advancesIndex)
         }
         val clampedEnd = offset.coerceIn(start, end)
-        return BitmapFontMetrics.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        return if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        }
     }
 
     @Implementation
@@ -283,18 +315,31 @@ class Arm64PaintShadow : ShadowPaint() {
             fillAdvances(text, start, end, advances, advancesIndex)
         }
         val clampedEnd = offset.coerceIn(start, end)
-        return BitmapFontMetrics.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        return if (TrueTypeFontRenderer.isLoaded) {
+            TrueTypeFontRenderer.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        } else {
+            BitmapFontMetrics.measure(text, start, clampedEnd, effectiveTextSize(), super.getTextScaleX())
+        }
     }
 
     @Implementation
     fun getFontMetrics(metrics: Paint.FontMetrics?): Float {
         val ts = effectiveTextSize()
         val target = metrics ?: Paint.FontMetrics()
-        target.top = -ts * 1.05f
-        target.ascent = -ts * 0.90f
-        target.descent = ts * 0.25f
-        target.bottom = ts * 0.30f
-        target.leading = 0f
+        if (TrueTypeFontRenderer.isLoaded) {
+            val m = TrueTypeFontRenderer.fontMetrics(ts)
+            target.top = m.top
+            target.ascent = m.ascent
+            target.descent = m.descent
+            target.bottom = m.bottom
+            target.leading = m.leading
+        } else {
+            target.top = -ts * 1.05f
+            target.ascent = -ts * 0.90f
+            target.descent = ts * 0.25f
+            target.bottom = ts * 0.30f
+            target.leading = 0f
+        }
         return target.descent - target.ascent
     }
 
@@ -305,11 +350,20 @@ class Arm64PaintShadow : ShadowPaint() {
     override fun getFontMetricsInt(fmi: Paint.FontMetricsInt?): Int {
         val ts = effectiveTextSize()
         val target = fmi ?: Paint.FontMetricsInt()
-        target.top = floor(-ts * 1.05f).toInt()
-        target.ascent = floor(-ts * 0.90f).toInt()
-        target.descent = ceil(ts * 0.25f).toInt()
-        target.bottom = ceil(ts * 0.30f).toInt()
-        target.leading = 0
+        if (TrueTypeFontRenderer.isLoaded) {
+            val m = TrueTypeFontRenderer.fontMetrics(ts)
+            target.top = floor(m.top).toInt()
+            target.ascent = floor(m.ascent).toInt()
+            target.descent = ceil(m.descent).toInt()
+            target.bottom = ceil(m.bottom).toInt()
+            target.leading = ceil(m.leading).toInt()
+        } else {
+            target.top = floor(-ts * 1.05f).toInt()
+            target.ascent = floor(-ts * 0.90f).toInt()
+            target.descent = ceil(ts * 0.25f).toInt()
+            target.bottom = ceil(ts * 0.30f).toInt()
+            target.leading = 0
+        }
         return target.descent - target.ascent
     }
 
@@ -364,7 +418,12 @@ class Arm64PaintShadow : ShadowPaint() {
         val sx = max(0f, super.getTextScaleX())
         val count = min(e - s, max(0, out.size - outIndex))
         for (i in 0 until count) {
-            out[outIndex + i] = BitmapFontMetrics.charAdvance(charAt(s + i), ts) * sx
+            val ch = charAt(s + i)
+            out[outIndex + i] = if (TrueTypeFontRenderer.isLoaded) {
+                TrueTypeFontRenderer.charAdvance(ch.code, ts) * sx
+            } else {
+                BitmapFontMetrics.charAdvance(ch, ts) * sx
+            }
         }
         return count
     }
@@ -1117,7 +1176,27 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
         val argb = effectiveColorArgb(paint) ?: return
         val textSize = max(8f, paint.textSize)
         val align = paint.textAlign ?: Paint.Align.LEFT
-        BitmapGlyphRenderer.drawString(surface, matrix, clip, text, x, baselineY, textSize, align, argb)
+        if (TrueTypeFontRenderer.isLoaded) {
+            val textScaleX = max(0f, paint.textScaleX)
+            val isBold = paint.isFakeBoldText || (paint.typeface?.isBold == true)
+            val paintShadow = runCatching { Shadow.extract<Any>(paint) }.getOrNull() as? Arm64PaintShadow
+            TrueTypeFontRenderer.drawString(
+                surface = surface,
+                matrix = matrix,
+                clip = clip,
+                text = text,
+                x = x,
+                baselineY = baselineY,
+                textSize = textSize,
+                textScaleX = textScaleX,
+                align = align,
+                argb = argb,
+                isBold = isBold,
+                blendMode = paintShadow?.activeBlendMode()
+            )
+        } else {
+            BitmapGlyphRenderer.drawString(surface, matrix, clip, text, x, baselineY, textSize, align, argb)
+        }
     }
 
     // --- Surface & Pixel Pipeline ---
@@ -1418,9 +1497,9 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
     }
 }
 
-private data class PathContour(val points: List<FloatArray>, val closed: Boolean)
+internal data class PathContour(val points: List<FloatArray>, val closed: Boolean)
 
-private data class AffineMatrix2D(
+internal data class AffineMatrix2D(
     var a: Float,
     var b: Float,
     var c: Float,
@@ -1500,7 +1579,7 @@ private data class AffineMatrix2D(
     }
 }
 
-private class PixelClip(
+internal class PixelClip(
     val left: Int,
     val top: Int,
     val right: Int,
@@ -1623,7 +1702,7 @@ private object SurfaceRegistry {
     }
 }
 
-private class RasterSurface(
+internal class RasterSurface(
     val bitmap: Bitmap,
     val pixels: IntArray,
     val width: Int,
@@ -1641,7 +1720,7 @@ private class RasterSurface(
     }
 }
 
-private fun blendWithMode(dst: Int, src: Int, coverage: Float, mode: BlendMode?): Int {
+internal fun blendWithMode(dst: Int, src: Int, coverage: Float, mode: BlendMode?): Int {
     return when (mode) {
         BlendMode.CLEAR -> {
             val keep = (1f - coverage).coerceIn(0f, 1f)

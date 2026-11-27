@@ -59,7 +59,7 @@ class TelemetryLayoutScreenshotTest {
         lateinit var hostView: View
         composeTestRule.setContent {
             hostView = configureSoftwareHostView(LocalView.current)
-            MaterialTheme {
+            TestCjkTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainScreen(viewModel = viewModel)
                 }
