@@ -45,3 +45,8 @@ AIC 的 Mod 加载及补丁支持已迁移至独立项目 AICP。
 5. **条款接受**：您下载、安装或使用本软件，即视为您已阅读、理解并同意本免责声明的全部内容。
 
 如您不同意上述任何条款，请立即停止使用并删除本软件。
+
+
+## 致谢
+
+- 图标设计参考与基线：[Material Symbols](https://github.com/google/material-design-icons)（Apache-2.0）与 [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme)（MIT），完整许可与来源声明见 [LICENSES/NOTICE](LICENSES/NOTICE)。

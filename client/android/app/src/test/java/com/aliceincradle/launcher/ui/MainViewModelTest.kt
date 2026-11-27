@@ -136,8 +136,8 @@ class MainViewModelTest {
         val initial = vm.uiState.value.folderPage
         assertEquals(leftDir.absolutePath, initial.currentPath)
         assertEquals(rightDir.absolutePath, initial.targetPath)
-        assertEquals(1, initial.items.size)
-        assertEquals("AliceInCradle.exe", initial.items.first().name)
+        assertEquals("..", initial.items.first().name)
+        assertTrue(initial.items.any { it.name == "AliceInCradle.exe" })
 
         // Create new file
         vm.openCreateEntryDialog(isFolder = false)

@@ -1,12 +1,16 @@
 package com.aliceincradle.launcher.ui
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import com.aliceincradle.launcher.data.DownloadQueueManager
+import com.aliceincradle.launcher.ui.file.ConfigTemplateRegistry
+import com.aliceincradle.launcher.ui.file.FilePickerDialog
 import java.io.File
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -41,7 +45,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -58,12 +64,10 @@ fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
-    val gameDirPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            viewModel.setInjectionGameDirFromSaf(uri.toString())
-        }
+    var showGameDirPicker by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = uiState.selectedTab == MainTab.FILES && uiState.folderPage.activeDialog == null) {
+        viewModel.onFolderBackPressed()
     }
 
     LaunchedEffect(uiState.injectionState.statusMessage) {
@@ -142,7 +146,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 telemetry = uiState.telemetry,
                 injectionState = uiState.injectionState,
                 onGaugeClick = { viewModel.openTelemetryDialog(it) },
-                onPickGameDir = { gameDirPicker.launch(null) },
+                onPickGameDir = { showGameDirPicker = true },
                 onRefreshProbe = { viewModel.refreshInjectionState() },
                 onRequestInject = { viewModel.requestInjection() },
                 modifier = contentModifier
@@ -199,6 +203,29 @@ fun MainScreen(viewModel: MainViewModel) {
                 state = uiState.folderPage,
                 onSelectPane = { viewModel.selectFilePane(it) },
                 onToggleSelection = { side, id -> viewModel.toggleFileSelection(side, id) },
+                onOpenEntry = { side, item ->
+                    viewModel.onPaneFileClicked(side, item) { unknownItem ->
+                        val path = unknownItem.path
+                        if (path.isNotBlank()) {
+                            try {
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    File(path)
+                                )
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, "*/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "打开文件"))
+                            } catch (_: ActivityNotFoundException) {
+                                Toast.makeText(context, "未找到可打开 ${unknownItem.name} 的应用", Toast.LENGTH_SHORT).show()
+                            } catch (_: Exception) {
+                                Toast.makeText(context, "无法打开 ${unknownItem.name}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                },
                 onOpenFolder = { side, item -> viewModel.navigateIntoFolder(side, item) },
                 onNavigateUp = { side -> viewModel.navigateUp(side) },
                 onSwitchPaneFromSaf = { side, uri -> viewModel.switchPaneDirectoryFromSaf(side, uri) },
@@ -224,6 +251,25 @@ fun MainScreen(viewModel: MainViewModel) {
                 onCustomExportToUri = { viewModel.startCustomExportToUri(it) },
                 onCancelFileOp = { viewModel.cancelFileOperation() },
                 onDismissDialog = { viewModel.dismissFileManagerDialog() },
+                onEditorContentChange = { viewModel.updateCodeEditorContent(it) },
+                onEditorUndo = { viewModel.undoCodeEditor() },
+                onEditorRedo = { viewModel.redoCodeEditor() },
+                onEditorInsertTab = { viewModel.insertTabInCodeEditor() },
+                onEditorSave = { viewModel.saveCodeEditor() },
+                onEditorRequestClose = { viewModel.requestCloseCodeEditor() },
+                onEditorConfirmDiscard = { viewModel.dismissFileManagerDialog() },
+                onEditorDismissDiscard = { viewModel.dismissCodeEditorDiscardConfirm() },
+                onConfigFieldChange = { idx, v -> viewModel.updateConfigTemplateField(idx, v) },
+                onConfigSave = { viewModel.saveConfigTemplateForm() },
+                onConfigUnmatchedDirectEdit = { viewModel.openUnmatchedConfigDirectly() },
+                onConfigUnmatchedSearchOnline = { fileName ->
+                    try {
+                        val url = ConfigTemplateRegistry.buildAllowlistedSearchUrl(fileName)
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    } catch (_: ActivityNotFoundException) {
+                        Toast.makeText(context, "未找到可用浏览器", Toast.LENGTH_SHORT).show()
+                    }
+                },
                 modifier = contentModifier
             )
 
@@ -286,6 +332,18 @@ fun MainScreen(viewModel: MainViewModel) {
         CheckpointRecoveryDialog(
             checkpoint = checkpoint,
             onRecover = { viewModel.recoverInjectionCheckpoint() }
+        )
+    }
+
+    if (showGameDirPicker) {
+        FilePickerDialog(
+            initialDir = viewModel.getInitialPickerDir(),
+            pickDirectoryOnly = true,
+            onConfirm = { picked ->
+                showGameDirPicker = false
+                viewModel.setInjectionGameDir(picked)
+            },
+            onDismiss = { showGameDirPicker = false }
         )
     }
 }

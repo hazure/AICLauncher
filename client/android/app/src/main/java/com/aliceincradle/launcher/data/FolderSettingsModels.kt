@@ -146,6 +146,39 @@ sealed class FileManagerDialog {
         val isFolder: Boolean = false,
         val draftName: String = ""
     ) : FileManagerDialog()
+
+    data class ReadOnlyViewer(
+        val item: FileItem,
+        val content: String,
+        val isMarkdown: Boolean,
+        val isTruncated: Boolean
+    ) : FileManagerDialog()
+
+    data class CodeEditor(
+        val item: FileItem,
+        val initialContent: String,
+        val content: String,
+        val hasBom: Boolean,
+        val lineEnding: String,
+        val undoStack: List<String> = emptyList(),
+        val redoStack: List<String> = emptyList(),
+        val showDiscardConfirm: Boolean = false
+    ) : FileManagerDialog() {
+        val isDirty: Boolean get() = content != initialContent
+    }
+
+    data class ConfigTemplateForm(
+        val item: FileItem,
+        val templateName: String,
+        val fields: List<com.aliceincradle.launcher.ui.file.ConfigField>,
+        val hasBom: Boolean,
+        val lineEnding: String
+    ) : FileManagerDialog()
+
+    data class ConfigUnmatchedPrompt(
+        val item: FileItem,
+        val fallbackToReadOnly: Boolean
+    ) : FileManagerDialog()
 }
 
 enum class FilePaneSide {

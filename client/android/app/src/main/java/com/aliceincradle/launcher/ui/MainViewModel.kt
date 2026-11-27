@@ -35,6 +35,13 @@ import com.aliceincradle.launcher.data.SystemTelemetryProvider
 import com.aliceincradle.launcher.data.TelemetryPreviewFactory
 import com.aliceincradle.launcher.data.formatFileSize
 import com.aliceincradle.launcher.data.validateEnvVars
+import com.aliceincradle.launcher.ui.file.ConfigTemplateRegistry
+import com.aliceincradle.launcher.ui.file.FileClickRouter
+import com.aliceincradle.launcher.ui.file.FileOpenAction
+import com.aliceincradle.launcher.ui.file.FileTextCodec
+import com.aliceincradle.launcher.ui.file.NavOutcome
+import com.aliceincradle.launcher.ui.file.PaneNavState
+import com.aliceincradle.launcher.ui.file.PathNavigator
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CoroutineDispatcher
@@ -1663,6 +1670,341 @@ class MainViewModel @JvmOverloads constructor(
     fun dismissInjectionSnackbar() {
         _uiState.update { state ->
             state.copy(injectionState = state.injectionState.copy(statusMessage = null))
+        }
+    }
+
+    // ==================== T34 Click-to-Open, Navigation & Editors ====================
+
+    private var leftNavState: PaneNavState? = null
+    private var rightNavState: PaneNavState? = null
+
+    fun setInjectionGameDir(dir: File) {
+        selectedInjectionGameDir = dir
+        refreshInjectionState()
+    }
+
+    fun getInitialPickerDir(): File {
+        return fileRepository.resolveInitialLeftDir(appContext)
+    }
+
+    fun onPaneFileClicked(side: FilePaneSide, item: FileItem, onExternalOpen: (FileItem) -> Unit = {}) {
+        val currentActive = _uiState.value.folderPage.activePane
+        if (currentActive != side) {
+            selectFilePane(side)
+            return
+        }
+
+        val currentPath = if (side == FilePaneSide.LEFT) {
+            _uiState.value.folderPage.currentPath
+        } else {
+            _uiState.value.folderPage.targetPath
+        }
+        val rootBoundary = fileRepository.resolveInitialLeftDir(appContext)
+        val nav = getOrInitNavState(side, rootBoundary, currentPath)
+        val targetFile = item.path.takeIf { it.isNotBlank() }?.let(::File)
+
+        when (val action = FileClickRouter.open(item, targetFile)) {
+            is FileOpenAction.NavigateParent -> {
+                when (val res = PathNavigator.navigateParent(nav)) {
+                    is NavOutcome.Navigated -> applyNavState(side, res.state)
+                    is NavOutcome.AtRoot -> _uiState.update {
+                        it.copy(folderPage = it.folderPage.copy(actionNotice = res.message))
+                    }
+                    is NavOutcome.OutOfBounds -> _uiState.update {
+                        it.copy(folderPage = it.folderPage.copy(actionNotice = res.message))
+                    }
+                }
+            }
+            is FileOpenAction.EnterDirectory -> {
+                if (targetFile != null) {
+                    when (val res = PathNavigator.navigateInto(nav, targetFile)) {
+                        is NavOutcome.Navigated -> applyNavState(side, res.state)
+                        is NavOutcome.AtRoot -> _uiState.update {
+                            it.copy(folderPage = it.folderPage.copy(actionNotice = res.message))
+                        }
+                        is NavOutcome.OutOfBounds -> _uiState.update {
+                            it.copy(folderPage = it.folderPage.copy(actionNotice = res.message))
+                        }
+                    }
+                }
+            }
+            is FileOpenAction.BlockedBinaryOrOversized -> {
+                _uiState.update {
+                    it.copy(folderPage = it.folderPage.copy(actionNotice = action.reason))
+                }
+            }
+            is FileOpenAction.OpenReadOnlyViewer -> openReadOnlyViewer(item, targetFile, action.isMarkdown)
+            is FileOpenAction.OpenCodeEditor -> openCodeEditor(item, targetFile)
+            is FileOpenAction.OpenConfigTemplate -> openConfigTemplate(item, targetFile, action.template)
+            is FileOpenAction.OpenConfigUnmatched -> {
+                _uiState.update {
+                    it.copy(
+                        folderPage = it.folderPage.copy(
+                            activeDialog = FileManagerDialog.ConfigUnmatchedPrompt(
+                                item = item,
+                                fallbackToReadOnly = action.fallbackToReadOnly
+                            )
+                        )
+                    )
+                }
+            }
+            is FileOpenAction.OpenUnknownExternal -> onExternalOpen(item)
+        }
+    }
+
+    fun onFolderBackPressed(): Boolean {
+        val side = _uiState.value.folderPage.activePane
+        val currentPath = if (side == FilePaneSide.LEFT) {
+            _uiState.value.folderPage.currentPath
+        } else {
+            _uiState.value.folderPage.targetPath
+        }
+        val nav = getOrInitNavState(side, fileRepository.resolveInitialLeftDir(appContext), currentPath)
+        return when (val res = PathNavigator.navigateBack(nav)) {
+            is NavOutcome.Navigated -> {
+                applyNavState(side, res.state)
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun getOrInitNavState(side: FilePaneSide, rootBoundary: File, currentPath: String): PaneNavState {
+        val existing = if (side == FilePaneSide.LEFT) leftNavState else rightNavState
+        if (existing != null && existing.currentDir.absolutePath == currentPath) {
+            return existing
+        }
+        val created = PaneNavState(
+            rootBoundary = rootBoundary,
+            currentDir = if (currentPath.isNotBlank()) File(currentPath) else rootBoundary
+        )
+        if (side == FilePaneSide.LEFT) leftNavState = created else rightNavState = created
+        return created
+    }
+
+    private fun applyNavState(side: FilePaneSide, next: PaneNavState) {
+        if (side == FilePaneSide.LEFT) leftNavState = next else rightNavState = next
+        switchPaneDirectory(side, next.currentDir)
+    }
+
+    private fun openReadOnlyViewer(item: FileItem, file: File?, isMarkdown: Boolean) {
+        if (file == null) return
+        probeScope.launch {
+            FileTextCodec.readForViewer(file).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        folderPage = it.folderPage.copy(
+                            activeDialog = FileManagerDialog.ReadOnlyViewer(
+                                item = item,
+                                content = res.content,
+                                isMarkdown = isMarkdown,
+                                isTruncated = res.isTruncated
+                            )
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "无法预览文件"))
+                }
+            }
+        }
+    }
+
+    private fun openCodeEditor(item: FileItem, file: File?) {
+        if (file == null) return
+        probeScope.launch {
+            FileTextCodec.readForEditor(file).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        folderPage = it.folderPage.copy(
+                            activeDialog = FileManagerDialog.CodeEditor(
+                                item = item,
+                                initialContent = res.content,
+                                content = res.content,
+                                hasBom = res.hasBom,
+                                lineEnding = res.lineEnding
+                            )
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "无法打开编辑器"))
+                }
+            }
+        }
+    }
+
+    private fun openConfigTemplate(
+        item: FileItem,
+        file: File?,
+        template: com.aliceincradle.launcher.ui.file.ConfigTemplate
+    ) {
+        if (file == null) return
+        probeScope.launch {
+            FileTextCodec.readForEditor(file).onSuccess { res ->
+                val parsed = ConfigTemplateRegistry.parseIniConfig(res.content, template)
+                _uiState.update {
+                    it.copy(
+                        folderPage = it.folderPage.copy(
+                            activeDialog = FileManagerDialog.ConfigTemplateForm(
+                                item = item,
+                                templateName = template.displayName,
+                                fields = parsed.fields,
+                                hasBom = res.hasBom,
+                                lineEnding = res.lineEnding
+                            )
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "无法读取配置"))
+                }
+            }
+        }
+    }
+
+    fun updateCodeEditorContent(nextContent: String) {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            if (nextContent == editor.content) return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = editor.copy(
+                        content = nextContent,
+                        undoStack = (editor.undoStack + editor.content).takeLast(30),
+                        redoStack = emptyList()
+                    )
+                )
+            )
+        }
+    }
+
+    fun undoCodeEditor() {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            val prev = editor.undoStack.lastOrNull() ?: return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = editor.copy(
+                        content = prev,
+                        undoStack = editor.undoStack.dropLast(1),
+                        redoStack = editor.redoStack + editor.content
+                    )
+                )
+            )
+        }
+    }
+
+    fun redoCodeEditor() {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            val next = editor.redoStack.lastOrNull() ?: return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = editor.copy(
+                        content = next,
+                        undoStack = editor.undoStack + editor.content,
+                        redoStack = editor.redoStack.dropLast(1)
+                    )
+                )
+            )
+        }
+    }
+
+    fun insertTabInCodeEditor() {
+        val editor = _uiState.value.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return
+        updateCodeEditorContent(editor.content + "    ")
+    }
+
+    fun saveCodeEditor() {
+        val editor = _uiState.value.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return
+        val file = editor.item.path.takeIf { it.isNotBlank() }?.let(::File) ?: return
+        probeScope.launch {
+            FileTextCodec.saveAtomically(file, editor.content, editor.hasBom, editor.lineEnding)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            folderPage = it.folderPage.copy(
+                                activeDialog = null,
+                                actionNotice = "已原子保存 ${editor.item.name}（已生成 .bak 备份）"
+                            )
+                        )
+                    }
+                    refreshFilePanesSync()
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "保存失败"))
+                    }
+                }
+        }
+    }
+
+    fun requestCloseCodeEditor() {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            if (editor.isDirty) {
+                state.copy(
+                    folderPage = state.folderPage.copy(activeDialog = editor.copy(showDiscardConfirm = true))
+                )
+            } else {
+                state.copy(folderPage = state.folderPage.copy(activeDialog = null))
+            }
+        }
+    }
+
+    fun dismissCodeEditorDiscardConfirm() {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            state.copy(folderPage = state.folderPage.copy(activeDialog = editor.copy(showDiscardConfirm = false)))
+        }
+    }
+
+    fun updateConfigTemplateField(index: Int, value: String) {
+        _uiState.update { state ->
+            val form = state.folderPage.activeDialog as? FileManagerDialog.ConfigTemplateForm ?: return@update state
+            val updated = form.fields.mapIndexed { idx, f -> if (idx == index) f.copy(value = value) else f }
+            state.copy(folderPage = state.folderPage.copy(activeDialog = form.copy(fields = updated)))
+        }
+    }
+
+    fun saveConfigTemplateForm() {
+        val form = _uiState.value.folderPage.activeDialog as? FileManagerDialog.ConfigTemplateForm ?: return
+        val file = form.item.path.takeIf { it.isNotBlank() }?.let(::File) ?: return
+        val serialized = ConfigTemplateRegistry.serializeIniConfig(
+            com.aliceincradle.launcher.ui.file.ParsedConfig(form.fields, form.lineEnding)
+        )
+        probeScope.launch {
+            FileTextCodec.saveAtomically(file, serialized, form.hasBom, form.lineEnding)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            folderPage = it.folderPage.copy(
+                                activeDialog = null,
+                                actionNotice = "已保存配置 ${form.item.name}"
+                            )
+                        )
+                    }
+                    refreshFilePanesSync()
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "保存配置失败"))
+                    }
+                }
+        }
+    }
+
+    fun openUnmatchedConfigDirectly() {
+        val prompt = _uiState.value.folderPage.activeDialog as? FileManagerDialog.ConfigUnmatchedPrompt ?: return
+        val file = prompt.item.path.takeIf { it.isNotBlank() }?.let(::File)
+        if (prompt.fallbackToReadOnly) {
+            openReadOnlyViewer(prompt.item, file, isMarkdown = false)
+        } else {
+            openCodeEditor(prompt.item, file)
         }
     }
 }

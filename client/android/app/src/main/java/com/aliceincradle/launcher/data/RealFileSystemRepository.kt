@@ -79,7 +79,17 @@ class RealFileSystemRepository {
             val children = dir.listFiles()
                 ?: return Result.failure(SecurityException("无法读取目录（权限不足）：${dir.absolutePath}"))
 
-            val items = children
+            val parentEntry = FileItem(
+                id = "__parent__:${dir.absolutePath}",
+                name = "..",
+                path = dir.parentFile?.absolutePath ?: dir.absolutePath,
+                isFolder = true,
+                sizeBytes = 0L,
+                lastModifiedMs = 0L,
+                permissions = "0755",
+                type = FolderEntryType.FOLDER
+            )
+            val items = listOf(parentEntry) + children
                 .asSequence()
                 .filter { showHidden || !it.name.startsWith(".") }
                 .sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase(Locale.ROOT) }))
