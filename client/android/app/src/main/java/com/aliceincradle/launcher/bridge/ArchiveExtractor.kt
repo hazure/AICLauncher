@@ -12,6 +12,7 @@ import java.util.zip.ZipInputStream
 enum class ArchiveContainer {
     SEVEN_Z,
     ZIP,
+    CF_CHALLENGE_HTML,
     UNKNOWN
 }
 
@@ -35,7 +36,7 @@ class ArchiveExtractor(
     fun detectContainer(file: File): ArchiveContainer {
         if (!file.isFile || !file.canRead()) return ArchiveContainer.UNKNOWN
         return try {
-            val header = ByteArray(6)
+            val header = ByteArray(64)
             val read = FileInputStream(file).use { it.read(header) }
             if (read >= 6 &&
                 header[0] == 0x37.toByte() &&
@@ -53,6 +54,13 @@ class ArchiveExtractor(
                 header[3] == 0x04.toByte()
             ) {
                 ArchiveContainer.ZIP
+            } else if (read > 0) {
+                val headText = String(header, 0, read, Charsets.US_ASCII).lowercase()
+                if (headText.contains("<!doctype") || headText.contains("<html")) {
+                    ArchiveContainer.CF_CHALLENGE_HTML
+                } else {
+                    ArchiveContainer.UNKNOWN
+                }
             } else {
                 ArchiveContainer.UNKNOWN
             }
@@ -165,6 +173,9 @@ class ArchiveExtractor(
                             entry = zis.nextEntry
                         }
                     }
+                }
+                ArchiveContainer.CF_CHALLENGE_HTML -> {
+                    return cleanupAndFail(IOException("CF_CHALLENGE_HTML: 命中 Cloudflare 挑战页，非压缩包文件"))
                 }
                 ArchiveContainer.UNKNOWN -> {
                     return cleanupAndFail(IOException("未知压缩包格式（非 7z 或 zip 魔数）"))

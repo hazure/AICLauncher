@@ -2014,13 +2014,18 @@ class MainViewModel @JvmOverloads constructor(
 
     enum class AcquisitionPhase {
         IDLE,
+        CAPTURING_SHORTCODE,
         RESOLVING_SOURCE,
         DOWNLOADING,
-        VERIFYING,
+        VERIFYING_MAGIC,
         EXTRACTING,
         READY,
+        SHORTCODE_MISSING,
         SOURCE_UNAVAILABLE,
+        LINK_UNRESOLVABLE,
         LINK_EXPIRED,
+        CF_CHALLENGE_HTML,
+        NOT_ARCHIVE,
         DOWNLOAD_FAILED,
         CHECKSUM_MISMATCH,
         EXTRACTOR_MISSING,
@@ -2041,18 +2046,52 @@ class MainViewModel @JvmOverloads constructor(
     private val gameSourceResolver = GameSourceResolver()
     private val archiveExtractor = ArchiveExtractor()
 
+    fun saveManualShortCode(shortCode: String, fileName: String) {
+        val ctx = appContext ?: return
+        val code = shortCode.trim()
+        val name = fileName.trim()
+        if (code.isEmpty() || name.isEmpty()) return
+        val store = com.aliceincradle.launcher.bridge.ShortCodeCacheStore(File(ctx.filesDir, "aicl_shortlink_cache.properties"))
+        store.save(
+            com.aliceincradle.launcher.bridge.CachedShortCode(
+                shortCode = code,
+                fileName = name,
+                version = null
+            )
+        )
+    }
+
     fun startOfficialTrialAcquisition() {
         val ctx = appContext ?: return
+        val store = com.aliceincradle.launcher.bridge.ShortCodeCacheStore(File(ctx.filesDir, "aicl_shortlink_cache.properties"))
         _acquisitionState.value = AcquisitionUiState(
             phase = AcquisitionPhase.RESOLVING_SOURCE,
-            statusMessage = "正在从官方源动态取链..."
+            statusMessage = "正在通过短链刷新最新签名直链..."
         )
         probeScope.launch {
-            val source = gameSourceResolver.resolveLatestWinTrial(ctx)
+            val cached = store.load()
+            val source = if (cached != null) {
+                gameSourceResolver.resolveFromShortCode(
+                    shortCode = cached.shortCode,
+                    fileName = cached.fileName,
+                    version = cached.version,
+                    sourceKind = com.aliceincradle.launcher.bridge.SourceKind.SHORTCODE_REFRESH
+                ).getOrNull()
+            } else {
+                _acquisitionState.value = AcquisitionUiState(
+                    phase = AcquisitionPhase.CAPTURING_SHORTCODE,
+                    statusMessage = "未缓存短码，正在通过官方页捕获..."
+                )
+                gameSourceResolver.resolveLatestWinTrial(ctx)
+            }
             if (source == null) {
                 _acquisitionState.value = AcquisitionUiState(
-                    phase = AcquisitionPhase.SOURCE_UNAVAILABLE,
-                    statusMessage = "官方源取链失败，请检查网络或使用下方备用链接"
+                    phase = if (cached == null) AcquisitionPhase.SHORTCODE_MISSING else AcquisitionPhase.LINK_UNRESOLVABLE,
+                    statusMessage = if (cached == null) {
+                        "未捕获到短码，请在设置中手动填入短码"
+                    } else {
+                        "取链未能刷新，可能短码失效或网络受限"
+                    }
                 )
                 return@launch
             }

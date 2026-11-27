@@ -273,6 +273,7 @@ class DownloadQueueManager(
             }
             val partFile = File(parent, "${request.destFile.name}.part")
             var currentUrl = request.url
+            var currentFp = GameSourceResolver.urlFingerprint(currentUrl)
             var reResolvedOnce = false
             var transientAttempt = 0
 
@@ -327,25 +328,28 @@ class DownloadQueueManager(
                             }
                         }
 
-                        // Integrity check (D5): strong sha256 if provided, else size + magic check
+                        // Integrity & Magic check (D4/D5)
+                        val container = ArchiveExtractor().detectContainer(partFile)
+                        runCatching {
+                            Log.i(
+                                "AICL_PIPELINE",
+                                "VERIFYING_MAGIC container=$container bytes=${partFile.length()} fp=$currentFp"
+                            )
+                        }
+                        if (container == ArchiveContainer.CF_CHALLENGE_HTML) {
+                            partFile.delete()
+                            throw IOException("CF_CHALLENGE_HTML: 命中 Cloudflare 挑战页，非压缩包文件")
+                        }
+                        if (container == ArchiveContainer.UNKNOWN) {
+                            partFile.delete()
+                            throw IOException("NOT_ARCHIVE: 下载产物非有效 7z/zip 压缩包")
+                        }
                         val expectedSha = request.expectedSha256
                         if (!expectedSha.isNullOrBlank()) {
                             val actualSha = computeSha256(partFile)
                             if (!actualSha.equals(expectedSha, ignoreCase = true)) {
                                 partFile.delete()
                                 throw IOException("CHECKSUM_MISMATCH: 文件哈希校验失败")
-                            }
-                        } else {
-                            val container = ArchiveExtractor().detectContainer(partFile)
-                            runCatching {
-                                Log.i(
-                                    "AICL_PIPELINE",
-                                    "VERIFYING ok (上游未提供哈希声明, container=$container, bytes=${partFile.length()}, fp=${GameSourceResolver.urlFingerprint(currentUrl)})"
-                                )
-                            }
-                            if (container == ArchiveContainer.UNKNOWN && partFile.length() == 0L) {
-                                partFile.delete()
-                                throw IOException("CHECKSUM_MISMATCH: 下载产物为空")
                             }
                         }
 
@@ -363,16 +367,22 @@ class DownloadQueueManager(
 
                     when (HttpErrorPolicy.classifyHttpCode(code)) {
                         HttpErrorAction.RE_RESOLVE_LINK -> {
-                            runCatching {
-                                Log.i("AICL_PIPELINE", "DOWNLOADING http=$code action=RE_RESOLVE_LINK fp=${GameSourceResolver.urlFingerprint(currentUrl)}")
-                            }
                             if (!reResolvedOnce && request.reResolveUrl != null) {
                                 reResolvedOnce = true
                                 val refreshed = request.reResolveUrl.invoke()
-                                if (!refreshed.isNullOrBlank()) {
-                                    currentUrl = refreshed
-                                    continue
+                                if (refreshed.isNullOrBlank()) {
+                                    throw IOException("LINK_UNRESOLVABLE: 重取直链为空")
                                 }
+                                val newFp = GameSourceResolver.urlFingerprint(refreshed)
+                                runCatching {
+                                    Log.i("AICL_PIPELINE", "DOWNLOADING http=$code action=RE_RESOLVE_LINK oldFp=$currentFp newFp=$newFp")
+                                }
+                                if (newFp == currentFp) {
+                                    throw IOException("LINK_UNRESOLVABLE: 取链未能刷新，可能短码失效或网络受限")
+                                }
+                                currentUrl = refreshed
+                                currentFp = newFp
+                                continue
                             }
                             throw IOException("LINK_EXPIRED: HTTP $code")
                         }
