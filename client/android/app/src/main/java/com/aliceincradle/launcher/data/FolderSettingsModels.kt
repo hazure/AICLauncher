@@ -100,10 +100,12 @@ data class FileItem(
     val type: FolderEntryType = if (isFolder) FolderEntryType.FOLDER else FolderEntryType.OTHER,
     val detailText: String = "",
     val logoText: String = "Logo",
-    val recursiveApplied: Boolean = false
+    val recursiveApplied: Boolean = false,
+    val path: String = "",
+    val lastModifiedMs: Long = 0L
 ) {
     val sizeLabel: String
-        get() = formatFileSize(sizeBytes)
+        get() = if (isFolder) "目录" else formatFileSize(sizeBytes)
 }
 
 sealed class FileManagerDialog {
@@ -139,6 +141,11 @@ sealed class FileManagerDialog {
         val targets: List<FileItem>,
         val downloadTargets: List<ExportTarget>
     ) : FileManagerDialog()
+
+    data class CreateEntry(
+        val isFolder: Boolean = false,
+        val draftName: String = ""
+    ) : FileManagerDialog()
 }
 
 enum class FilePaneSide {
@@ -147,14 +154,19 @@ enum class FilePaneSide {
 }
 
 data class FolderPageState(
-    val currentPath: String = DefaultPathProvider.DEFAULT_CURRENT_DIR,
-    val targetPath: String = DefaultPathProvider.DEFAULT_TARGET_DIR,
-    val items: List<FileItem> = FolderPreviewFactory.createDefaultItems(),
-    val targetItems: List<FileItem> = FolderPreviewFactory.createTargetItems(),
+    val currentPath: String = "",
+    val targetPath: String = "",
+    val items: List<FileItem> = emptyList(),
+    val targetItems: List<FileItem> = emptyList(),
     val activePane: FilePaneSide = FilePaneSide.LEFT,
     val activeDialog: FileManagerDialog? = null,
-    val actionNotice: String? = null
+    val actionNotice: String? = null,
+    val clipboardItems: List<FileItem> = emptyList(),
+    val hasAllFilesAccess: Boolean = false,
+    val isLoadingFiles: Boolean = false
 ) {
+    val hasClipboard: Boolean
+        get() = clipboardItems.isNotEmpty()
     val activeItems: List<FileItem>
         get() = if (activePane == FilePaneSide.LEFT) items else targetItems
 
@@ -220,7 +232,6 @@ data class SettingsPageState(
     val pythonVersionOptions: List<String> = listOf("Python 3.10", "Python 3.11", "Python 3.12"),
     val pythonWarningText: String = "无法检测到？点击下载 Python！",
     val showPythonWarning: Boolean = true,
-    // Display-only mock preset strings; never used for filesystem I/O.
     val selectedPythonDir: String = "D:/python",
     val pythonDirOptions: List<String> = listOf("D:/python", "C:/Python310", "容器默认环境"),
     val customPathButtonText: String = "自定义路径选择",
@@ -228,6 +239,7 @@ data class SettingsPageState(
     val customPathDraft: String = "",
     val reservedButtonLabel: String = "Python 设置",
     val reservedHintText: String = "此处不再多举例！",
+    val cacheSizeText: String = "计算中...",
     val statusNotice: String? = null
 )
 
@@ -243,174 +255,3 @@ fun formatFileSize(bytes: Long): String {
     }
 }
 
-object FolderPreviewFactory {
-    private const val KB = 1024L
-    private const val MB = 1024L * 1024L
-
-    fun createDefaultItems(): List<FileItem> = listOf(
-        FileItem(
-            id = "dir-data",
-            name = "AliceInCradle_Data",
-            isFolder = true,
-            sizeBytes = 640L * MB,
-            permissions = "0755",
-            type = FolderEntryType.FOLDER,
-            detailText = "游戏主资产与场景包目录。"
-        ),
-        FileItem(
-            id = "dir-mods",
-            name = "Mods",
-            isFolder = true,
-            sizeBytes = 128L * MB,
-            permissions = "0777",
-            type = FolderEntryType.FOLDER,
-            detailText = "本地模组与动态挂载扩展池。"
-        ),
-        FileItem(
-            id = "dir-streaming",
-            name = "StreamingAssets",
-            isFolder = true,
-            sizeBytes = 96L * MB,
-            permissions = "0755",
-            type = FolderEntryType.FOLDER,
-            detailText = "包含原生完整性校验表 _sha.txt 与流式资源。"
-        ),
-        FileItem(
-            id = "file-patch-py",
-            name = "patch_unsafeAssem.py",
-            isFolder = false,
-            sizeBytes = 30L * KB,
-            permissions = "0644",
-            type = FolderEntryType.PYTHON,
-            detailText = "CIL 字节码动态重定向与哈希同步脚本。"
-        ),
-        FileItem(
-            id = "file-unmosaic-py",
-            name = "unmosaic.py",
-            isFolder = false,
-            sizeBytes = 62L * KB,
-            permissions = "0644",
-            type = FolderEntryType.PYTHON,
-            detailText = "托管层资源处理与校验辅助脚本。"
-        ),
-        FileItem(
-            id = "file-launcher-sh",
-            name = "launcher.sh",
-            isFolder = false,
-            sizeBytes = 2L * KB,
-            permissions = "0755",
-            type = FolderEntryType.SHELL,
-            detailText = "Box64 / DXVK / Turnip 转译层外部启动脚本。"
-        ),
-        FileItem(
-            id = "file-readme-txt",
-            name = "README.txt",
-            isFolder = false,
-            sizeBytes = 15L * KB,
-            permissions = "0644",
-            type = FolderEntryType.TEXT,
-            detailText = "兼容补丁环境说明与构建注意事项。"
-        ),
-        FileItem(
-            id = "file-notes-txt",
-            name = "compat_notes.txt",
-            isFolder = false,
-            sizeBytes = 8L * KB,
-            permissions = "0644",
-            type = FolderEntryType.TEXT,
-            detailText = "转译层运行参数调优记录。"
-        ),
-        FileItem(
-            id = "file-alice-exe",
-            name = "AliceInCradle.exe",
-            isFolder = false,
-            sizeBytes = 64L * MB,
-            permissions = "0777",
-            type = FolderEntryType.EXECUTABLE,
-            detailText = "Zero-CRT 原生 Win64 启动引导程序。"
-        )
-    )
-
-    fun createTargetItems(): List<FileItem> = listOf(
-        FileItem(
-            id = "dst-dir-data",
-            name = "AliceInCradle_Data",
-            isFolder = true,
-            sizeBytes = 640L * MB,
-            permissions = "0755",
-            type = FolderEntryType.FOLDER
-        ),
-        FileItem(
-            id = "dst-dir-mono",
-            name = "MonoBleedingEdge",
-            isFolder = true,
-            sizeBytes = 42L * MB,
-            permissions = "0755",
-            type = FolderEntryType.FOLDER
-        ),
-        FileItem(
-            id = "dst-dir-mods",
-            name = "Mods",
-            isFolder = true,
-            sizeBytes = 128L * MB,
-            permissions = "0777",
-            type = FolderEntryType.FOLDER
-        ),
-        FileItem(
-            id = "dst-dir-bepinex",
-            name = "BepInEx",
-            isFolder = true,
-            sizeBytes = 24L * MB,
-            permissions = "0755",
-            type = FolderEntryType.FOLDER
-        ),
-        FileItem(
-            id = "dst-exe-aic",
-            name = "AliceInCradle.exe",
-            isFolder = false,
-            sizeBytes = 64L * MB,
-            permissions = "0777",
-            type = FolderEntryType.EXECUTABLE
-        ),
-        FileItem(
-            id = "dst-dll-unity",
-            name = "UnityPlayer.dll",
-            isFolder = false,
-            sizeBytes = 31L * MB,
-            permissions = "0755",
-            type = FolderEntryType.OTHER
-        ),
-        FileItem(
-            id = "dst-sh-launcher",
-            name = "launcher.sh",
-            isFolder = false,
-            sizeBytes = 2L * KB,
-            permissions = "0755",
-            type = FolderEntryType.SHELL
-        ),
-        FileItem(
-            id = "dst-conf-dxvk",
-            name = "dxvk.conf",
-            isFolder = false,
-            sizeBytes = 1L * KB,
-            permissions = "0644",
-            type = FolderEntryType.TEXT
-        ),
-        FileItem(
-            id = "dst-py-patch",
-            name = "patch_unsafeAssem.py",
-            isFolder = false,
-            sizeBytes = 30L * KB,
-            permissions = "0644",
-            type = FolderEntryType.PYTHON
-        ),
-        FileItem(
-            id = "dst-txt-readme",
-            name = "README.txt",
-            isFolder = false,
-            sizeBytes = 15L * KB,
-            permissions = "0644",
-            type = FolderEntryType.TEXT
-        )
-    )
-}

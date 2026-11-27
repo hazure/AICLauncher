@@ -6,24 +6,33 @@ import com.aliceincradle.launcher.bridge.EnvDetector
 import com.aliceincradle.launcher.data.DefaultPathProvider
 import com.aliceincradle.launcher.data.DeviceInfo
 import com.aliceincradle.launcher.data.DeviceInfoProvider
+import com.aliceincradle.launcher.data.DownloadCatalogFilter
 import com.aliceincradle.launcher.data.DownloadCatalogItem
-import com.aliceincradle.launcher.data.DownloadCatalogPreviewFactory
 import com.aliceincradle.launcher.data.DownloadContentStatus
 import com.aliceincradle.launcher.data.DownloadFilterState
 import com.aliceincradle.launcher.data.DownloadPageState
+import com.aliceincradle.launcher.data.DownloadProgressListener
+import com.aliceincradle.launcher.data.DownloadQueueManager
+import com.aliceincradle.launcher.data.DownloadRequest
 import com.aliceincradle.launcher.data.FileItem
 import com.aliceincradle.launcher.data.FileManagerDialog
 import com.aliceincradle.launcher.data.FilePaneSide
 import com.aliceincradle.launcher.data.FolderPageState
+import com.aliceincradle.launcher.data.MaintenanceManager
 import com.aliceincradle.launcher.data.PathProvider
 import com.aliceincradle.launcher.data.PosixPermissions
+import com.aliceincradle.launcher.data.RealFileSystemRepository
+import com.aliceincradle.launcher.data.RemoteCatalogFetcher
 import com.aliceincradle.launcher.data.SettingsData
 import com.aliceincradle.launcher.data.SettingsManager
 import com.aliceincradle.launcher.data.SettingsPageState
 import com.aliceincradle.launcher.data.SystemTelemetry
 import com.aliceincradle.launcher.data.SystemTelemetryProvider
 import com.aliceincradle.launcher.data.TelemetryPreviewFactory
+import com.aliceincradle.launcher.data.formatFileSize
 import com.aliceincradle.launcher.data.validateEnvVars
+import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -70,11 +79,15 @@ class MainViewModel @JvmOverloads constructor(
     private val telemetryProvider: SystemTelemetryProvider = SystemTelemetryProvider(),
     private val envDetector: EnvDetector = EnvDetector(),
     private val pathProvider: PathProvider = DefaultPathProvider(envDetector),
-    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     autoStartPolling: Boolean = true,
     private val refreshIntervalMs: Long = 2_000L,
-    private val fileOpStepDelayMs: Long = 35L,
-    private var settingsManager: SettingsManager? = null
+    private var settingsManager: SettingsManager? = null,
+    private val fileRepository: RealFileSystemRepository = RealFileSystemRepository(),
+    private val catalogFetcher: RemoteCatalogFetcher = RemoteCatalogFetcher(),
+    private val maintenanceManager: MaintenanceManager = MaintenanceManager(),
+    downloadQueueManagerOverride: DownloadQueueManager? = null,
+    autoFetchCatalog: Boolean = true
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -86,7 +99,53 @@ class MainViewModel @JvmOverloads constructor(
     private val refreshMutex = Mutex()
     private var fileOpJob: Job? = null
 
+    private val downloadQueueManager: DownloadQueueManager = downloadQueueManagerOverride
+        ?: DownloadQueueManager(scope = probeScope, ioDispatcher = ioDispatcher, workerCount = 2)
+
     init {
+        downloadQueueManager.setListener(object : DownloadProgressListener {
+            override fun onStarted(itemId: String) {
+                updateCatalogItem(itemId) {
+                    it.copy(status = DownloadContentStatus.DOWNLOADING, errorMessage = null)
+                }
+            }
+
+            override fun onProgress(itemId: String, downloadedBytes: Long, totalBytes: Long, percent: Int) {
+                updateCatalogItem(itemId) {
+                    it.copy(
+                        status = DownloadContentStatus.DOWNLOADING,
+                        downloadedBytes = downloadedBytes,
+                        sizeBytes = if (totalBytes > 0L) totalBytes else it.sizeBytes,
+                        progressPercent = percent
+                    )
+                }
+            }
+
+            override fun onCompleted(itemId: String, file: File) {
+                updateCatalogItem(itemId) {
+                    it.copy(
+                        status = DownloadContentStatus.DOWNLOADED,
+                        progressPercent = 100,
+                        downloadedBytes = file.length(),
+                        sizeBytes = file.length(),
+                        sizeLabel = formatFileSize(file.length()),
+                        localFilePath = file.absolutePath,
+                        errorMessage = null
+                    )
+                }
+                refreshFilePanes()
+            }
+
+            override fun onFailed(itemId: String, errorMessage: String) {
+                updateCatalogItem(itemId) {
+                    it.copy(
+                        status = DownloadContentStatus.FAILED,
+                        errorMessage = errorMessage
+                    )
+                }
+            }
+        })
+
         if (autoStartPolling) {
             probeScope.launch {
                 refreshTelemetryAndEnv(includeEnv = true)
@@ -95,6 +154,9 @@ class MainViewModel @JvmOverloads constructor(
                     refreshTelemetryAndEnv(includeEnv = false)
                 }
             }
+        }
+        if (autoFetchCatalog) {
+            refreshDownloadCatalog()
         }
     }
 
@@ -108,8 +170,23 @@ class MainViewModel @JvmOverloads constructor(
         }
         if (hasLoadedContext) return
         hasLoadedContext = true
+
+        val leftDir = fileRepository.resolveInitialLeftDir(this.appContext)
+        val rightDir = fileRepository.resolveInitialRightDir(this.appContext)
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    currentPath = leftDir.absolutePath,
+                    targetPath = rightDir.absolutePath,
+                    hasAllFilesAccess = fileRepository.hasAllFilesAccess()
+                )
+            )
+        }
+
         probeScope.launch {
             refreshTelemetryAndEnv(includeEnv = true)
+            refreshFilePanesSync()
+            refreshCacheSizeSync()
         }
     }
 
@@ -127,36 +204,37 @@ class MainViewModel @JvmOverloads constructor(
             } else {
                 null
             }
-            val currentDir = if (includeEnv) pathProvider.currentDirectoryLabel(ctx) else null
-            val targetDir = if (includeEnv) pathProvider.targetDirectoryLabel(ctx) else null
 
             _uiState.update { state ->
                 val nextInfo = updatedDeviceInfo ?: state.deviceInfo.copy(
                     gpu = sampledTelemetry.gpu.renderer,
                     memory = DeviceInfoProvider.formatMemorySummary(sampledTelemetry.memory)
                 )
-                val nextFolderPage = if (currentDir != null && targetDir != null) {
-                    state.folderPage.copy(currentPath = currentDir, targetPath = targetDir)
-                } else {
-                    state.folderPage
-                }
                 state.copy(
                     isLoading = false,
                     deviceInfo = nextInfo,
-                    telemetry = sampledTelemetry,
-                    folderPage = nextFolderPage
+                    telemetry = sampledTelemetry
                 )
             }
         }
     }
 
     override fun onCleared() {
+        downloadQueueManager.close()
         probeScope.cancel()
         super.onCleared()
     }
 
     fun selectTab(tab: MainTab) {
         _uiState.update { it.copy(selectedTab = tab) }
+        when (tab) {
+            MainTab.FILES -> {
+                refreshAllFilesPermission()
+                refreshFilePanes()
+            }
+            MainTab.SETTINGS -> refreshCacheSize()
+            else -> Unit
+        }
     }
 
     fun openTelemetryDialog(type: TelemetryDialogType) {
@@ -167,11 +245,52 @@ class MainViewModel @JvmOverloads constructor(
         _uiState.update { it.copy(activeDialog = TelemetryDialogType.NONE) }
     }
 
-    /**
-     * Reserved interface for feeding real telemetry samples from native/bridge probes.
-     */
     fun updateTelemetry(telemetry: SystemTelemetry) {
         _uiState.update { it.copy(telemetry = telemetry) }
+    }
+
+    // ==================== Download Catalog & Queue ====================
+
+    fun refreshDownloadCatalog() {
+        _uiState.update { state ->
+            state.copy(
+                downloadPage = state.downloadPage.copy(
+                    isLoadingCatalog = true,
+                    catalogError = null,
+                    statsText = "正在拉取远端资源列表..."
+                )
+            )
+        }
+        probeScope.launch {
+            val startMs = System.currentTimeMillis()
+            val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
+            val result = catalogFetcher.fetchCatalog(downloadDir)
+            val elapsedSec = (System.currentTimeMillis() - startMs).coerceAtLeast(1L) / 1000.0
+            result.onSuccess { fetched ->
+                _uiState.update { state ->
+                    val filtered = DownloadCatalogFilter.filterItems(fetched, state.downloadPage.filter)
+                    state.copy(
+                        downloadPage = state.downloadPage.copy(
+                            allItems = fetched,
+                            items = filtered,
+                            isLoadingCatalog = false,
+                            catalogError = null,
+                            statsText = String.format(Locale.US, "共 %d 个内容，耗时 %.2fs", fetched.size, elapsedSec)
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        downloadPage = state.downloadPage.copy(
+                            isLoadingCatalog = false,
+                            catalogError = err.message ?: "网络请求失败",
+                            statsText = "拉取远端资源失败：${err.message ?: "未知错误"}"
+                        )
+                    )
+                }
+            }
+        }
     }
 
     fun updateDownloadQuery(query: String) {
@@ -199,24 +318,35 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     fun triggerCatalogDownload(itemId: String) {
-        _uiState.update { state ->
-            val target = state.downloadPage.allItems.find { it.id == itemId } ?: return@update state
-            if (target.status == DownloadContentStatus.DISABLED) return@update state
+        val target = _uiState.value.downloadPage.allItems.find { it.id == itemId } ?: return
+        if (target.status == DownloadContentStatus.DISABLED ||
+            target.status == DownloadContentStatus.QUEUED ||
+            target.status == DownloadContentStatus.DOWNLOADING ||
+            target.downloadUrl.isBlank()
+        ) {
+            return
+        }
 
-            val updatedAll = state.downloadPage.allItems.map { item ->
-                if (item.id == itemId && item.status == DownloadContentStatus.DOWNLOADING) {
-                    item.copy(status = DownloadContentStatus.DOWNLOADED)
-                } else {
-                    item
-                }
-            }
-            state.copy(
-                downloadPage = state.downloadPage.copy(
-                    allItems = updatedAll,
-                    items = DownloadCatalogPreviewFactory.filterItems(updatedAll, state.downloadPage.filter)
-                )
+        val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
+        val fileName = target.fileName.ifBlank { "${target.id}.bin" }
+        val destFile = File(downloadDir, fileName)
+
+        updateCatalogItem(itemId) {
+            it.copy(
+                status = DownloadContentStatus.QUEUED,
+                progressPercent = 0,
+                downloadedBytes = 0L,
+                errorMessage = null
             )
         }
+        downloadQueueManager.enqueue(
+            DownloadRequest(
+                itemId = itemId,
+                url = target.downloadUrl,
+                destFile = destFile,
+                expectedBytes = target.sizeBytes
+            )
+        )
     }
 
     fun openCatalogItemDetail(item: DownloadCatalogItem) {
@@ -231,14 +361,135 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
+    private fun updateCatalogItem(
+        itemId: String,
+        transform: (DownloadCatalogItem) -> DownloadCatalogItem
+    ) {
+        _uiState.update { state ->
+            val updatedAll = state.downloadPage.allItems.map { item ->
+                if (item.id == itemId) transform(item) else item
+            }
+            state.copy(
+                downloadPage = state.downloadPage.copy(
+                    allItems = updatedAll,
+                    items = DownloadCatalogFilter.filterItems(updatedAll, state.downloadPage.filter)
+                )
+            )
+        }
+    }
+
+    // ==================== Real Dual-Pane File Manager ====================
+
+    fun refreshAllFilesPermission() {
+        val granted = fileRepository.hasAllFilesAccess()
+        _uiState.update { state ->
+            state.copy(folderPage = state.folderPage.copy(hasAllFilesAccess = granted))
+        }
+    }
+
+    fun initFileDirectoriesForTest(leftDir: File, rightDir: File) {
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    currentPath = leftDir.absolutePath,
+                    targetPath = rightDir.absolutePath
+                )
+            )
+        }
+        refreshFilePanes()
+    }
+
+    fun refreshFilePanes() {
+        probeScope.launch {
+            refreshFilePanesSync()
+        }
+    }
+
+    private fun refreshFilePanesSync() {
+        val state = _uiState.value
+        val showHidden = state.settingsPage.showHiddenFiles
+        val leftPath = state.folderPage.currentPath
+        val rightPath = state.folderPage.targetPath
+
+        val leftResult = if (leftPath.isNotBlank()) {
+            fileRepository.listDirectory(File(leftPath), showHidden)
+        } else {
+            Result.success(emptyList())
+        }
+        val rightResult = if (rightPath.isNotBlank()) {
+            fileRepository.listDirectory(File(rightPath), showHidden)
+        } else {
+            Result.success(emptyList())
+        }
+
+        _uiState.update { current ->
+            val notice = leftResult.exceptionOrNull()?.message
+                ?: rightResult.exceptionOrNull()?.message
+                ?: current.folderPage.actionNotice
+            current.copy(
+                folderPage = current.folderPage.copy(
+                    items = leftResult.getOrDefault(current.folderPage.items),
+                    targetItems = rightResult.getOrDefault(current.folderPage.targetItems),
+                    hasAllFilesAccess = fileRepository.hasAllFilesAccess(),
+                    isLoadingFiles = false,
+                    actionNotice = notice
+                )
+            )
+        }
+    }
+
     fun selectFilePane(side: FilePaneSide) {
         _uiState.update { state ->
             state.copy(folderPage = state.folderPage.copy(activePane = side))
         }
     }
 
+    fun navigateIntoFolder(side: FilePaneSide, item: FileItem) {
+        if (!item.isFolder || item.path.isBlank()) return
+        switchPaneDirectory(side, File(item.path))
+    }
+
+    fun navigateUp(side: FilePaneSide) {
+        val currentPath = if (side == FilePaneSide.LEFT) {
+            _uiState.value.folderPage.currentPath
+        } else {
+            _uiState.value.folderPage.targetPath
+        }
+        val parent = File(currentPath).parentFile ?: return
+        if (!parent.canRead()) {
+            _uiState.update { state ->
+                state.copy(folderPage = state.folderPage.copy(actionNotice = "无法访问上级目录：${parent.absolutePath}"))
+            }
+            return
+        }
+        switchPaneDirectory(side, parent)
+    }
+
+    fun switchPaneDirectory(side: FilePaneSide, dir: File) {
+        _uiState.update { state ->
+            val updatedFolder = if (side == FilePaneSide.LEFT) {
+                state.folderPage.copy(activePane = side, currentPath = dir.absolutePath, actionNotice = null)
+            } else {
+                state.folderPage.copy(activePane = side, targetPath = dir.absolutePath, actionNotice = null)
+            }
+            state.copy(folderPage = updatedFolder)
+        }
+        refreshFilePanes()
+    }
+
+    fun switchPaneDirectoryFromSaf(side: FilePaneSide, treeUriString: String) {
+        val resolved = fileRepository.resolveSafTreeToDirectory(treeUriString)
+        if (resolved != null) {
+            switchPaneDirectory(side, resolved)
+        } else {
+            _uiState.update { state ->
+                state.copy(folderPage = state.folderPage.copy(actionNotice = "所选 SAF 目录暂不支持直接浏览，可用于导出目标"))
+            }
+        }
+    }
+
     fun toggleFileSelection(itemId: String) {
-        toggleFileSelection(FilePaneSide.LEFT, itemId)
+        toggleFileSelection(_uiState.value.folderPage.activePane, itemId)
     }
 
     fun toggleFileSelection(side: FilePaneSide, itemId: String) {
@@ -262,6 +513,56 @@ class MainViewModel @JvmOverloads constructor(
                 list.map { it.copy(isSelected = !allSelected) }
             }
             state.copy(folderPage = updatedFolder)
+        }
+    }
+
+    fun openCreateEntryDialog(isFolder: Boolean = false) {
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.CreateEntry(isFolder = isFolder, draftName = "")
+                )
+            )
+        }
+    }
+
+    fun updateCreateEntryDialog(isFolder: Boolean, draftName: String) {
+        _uiState.update { state ->
+            if (state.folderPage.activeDialog !is FileManagerDialog.CreateEntry) return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.CreateEntry(isFolder = isFolder, draftName = draftName)
+                )
+            )
+        }
+    }
+
+    fun confirmCreateEntry() {
+        val dialog = _uiState.value.folderPage.activeDialog as? FileManagerDialog.CreateEntry ?: return
+        val parentPath = _uiState.value.folderPage.activeSourcePath
+        if (parentPath.isBlank()) return
+        probeScope.launch {
+            val res = fileRepository.createEntry(File(parentPath), dialog.draftName, dialog.isFolder)
+            res.onSuccess { created ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "已创建：${created.name}"
+                        )
+                    )
+                }
+                refreshFilePanesSync()
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "创建失败：${err.message}"
+                        )
+                    )
+                }
+            }
         }
     }
 
@@ -302,19 +603,26 @@ class MainViewModel @JvmOverloads constructor(
             return
         }
         probeScope.launch {
-            _uiState.update { state ->
-                if (state.folderPage.activeDialog !is FileManagerDialog.Rename) return@update state
-                val updatedFolder = updateActivePaneItems(state.folderPage) { list ->
-                    list.map { item ->
-                        if (item.id == dialog.item.id) item.copy(name = newName) else item
-                    }
-                }
-                state.copy(
-                    folderPage = updatedFolder.copy(
-                        activeDialog = null,
-                        actionNotice = "已重命名：${dialog.item.name} -> $newName"
+            val res = fileRepository.renameEntry(dialog.item, newName)
+            res.onSuccess { renamed ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "已重命名：${dialog.item.name} -> ${renamed.name}"
+                        )
                     )
-                )
+                }
+                refreshFilePanesSync()
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "重命名失败：${err.message}"
+                        )
+                    )
+                }
             }
         }
     }
@@ -333,21 +641,55 @@ class MainViewModel @JvmOverloads constructor(
 
     fun confirmDeleteSelected() {
         val dialog = _uiState.value.folderPage.activeDialog as? FileManagerDialog.DeleteConfirm ?: return
-        val targetIds = dialog.targets.map { it.id }.toSet()
         probeScope.launch {
-            _uiState.update { state ->
-                if (state.folderPage.activeDialog !is FileManagerDialog.DeleteConfirm) return@update state
-                val updatedFolder = updateActivePaneItems(state.folderPage) { list ->
-                    list.filterNot { it.id in targetIds }
-                }
-                state.copy(
-                    folderPage = updatedFolder.copy(
-                        activeDialog = null,
-                        actionNotice = "已删除 ${targetIds.size} 项（模拟操作）"
+            val res = fileRepository.deleteEntries(dialog.targets)
+            res.onSuccess { count ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "已删除 $count 项"
+                        )
                     )
-                )
+                }
+                refreshFilePanesSync()
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "删除失败：${err.message}"
+                        )
+                    )
+                }
             }
         }
+    }
+
+    fun copySelectedToClipboard() {
+        val targets = _uiState.value.folderPage.selectedItems
+        if (targets.isEmpty()) return
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    clipboardItems = targets,
+                    actionNotice = "已复制 ${targets.size} 项到剪贴板，可切换目录后点击粘贴"
+                )
+            )
+        }
+    }
+
+    fun pasteClipboardToActivePane() {
+        val folder = _uiState.value.folderPage
+        val sources = folder.clipboardItems
+        if (sources.isEmpty() || folder.activeSourcePath.isBlank()) return
+        val destDir = File(folder.activeSourcePath)
+        launchRealCopy(
+            operationTitle = "正在粘贴文件...",
+            sources = sources,
+            destDir = destDir,
+            completionNoticePrefix = "已粘贴"
+        )
     }
 
     fun startCopySelectedFiles() {
@@ -355,22 +697,83 @@ class MainViewModel @JvmOverloads constructor(
         val targets = folder.selectedItems
         if (targets.isEmpty()) return
         val destination = folder.activeDestinationPath
-        launchSimulatedFileProgress(
+        if (destination.isBlank()) return
+        launchRealCopy(
             operationTitle = "正在复制文件...",
-            targets = targets,
-            targetDescription = destination,
-            completionNotice = "已完成复制 ${targets.size} 项至 $destination"
+            sources = targets,
+            destDir = File(destination),
+            completionNoticePrefix = "已完成复制"
         )
+    }
+
+    private fun launchRealCopy(
+        operationTitle: String,
+        sources: List<FileItem>,
+        destDir: File,
+        completionNoticePrefix: String
+    ) {
+        fileOpJob?.cancel()
+        val firstName = sources.firstOrNull()?.name ?: ""
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.FileOpProgress(
+                        operationTitle = operationTitle,
+                        currentFileName = firstName,
+                        targetDescription = destDir.absolutePath,
+                        progressPercent = 0
+                    )
+                )
+            )
+        }
+        fileOpJob = probeScope.launch {
+            val res = fileRepository.copyEntriesWithProgress(sources, destDir) { currentFile, percent ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = FileManagerDialog.FileOpProgress(
+                                operationTitle = operationTitle,
+                                currentFileName = currentFile,
+                                targetDescription = destDir.absolutePath,
+                                progressPercent = percent
+                            )
+                        )
+                    )
+                }
+            }
+            res.onSuccess { count ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "$completionNoticePrefix $count 项至 ${destDir.absolutePath}"
+                        )
+                    )
+                }
+                refreshFilePanesSync()
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "文件操作失败：${err.message}"
+                        )
+                    )
+                }
+            }
+        }
     }
 
     fun openPropertiesDialog() {
         _uiState.update { state ->
             val folder = state.folderPage
             val target = folder.selectedItems.firstOrNull() ?: return@update state
-            val resolvedPath = if (folder.activePane == FilePaneSide.LEFT) {
-                pathProvider.buildItemPath(target.name, appContext)
-            } else {
-                pathProvider.buildTargetItemPath(target.name, appContext)
+            val resolvedPath = target.path.ifBlank {
+                if (folder.activePane == FilePaneSide.LEFT) {
+                    pathProvider.buildItemPath(target.name, appContext)
+                } else {
+                    pathProvider.buildTargetItemPath(target.name, appContext)
+                }
             }
             state.copy(
                 folderPage = folder.copy(
@@ -449,27 +852,27 @@ class MainViewModel @JvmOverloads constructor(
         val resolvedOctal = PosixPermissions.fromOctal(dialog.octalInput)?.toFourDigitOctal()
             ?: dialog.permissions.toFourDigitOctal()
         probeScope.launch {
-            _uiState.update { state ->
-                if (state.folderPage.activeDialog !is FileManagerDialog.PermissionEdit) return@update state
-                val updatedFolder = updateActivePaneItems(state.folderPage) { list ->
-                    list.map { item ->
-                        if (item.id == dialog.item.id) {
-                            item.copy(
-                                permissions = resolvedOctal,
-                                recursiveApplied = dialog.applyRecursively
-                            )
-                        } else {
-                            item
-                        }
-                    }
-                }
+            val res = fileRepository.applyPermissions(dialog.item, resolvedOctal, dialog.applyRecursively)
+            res.onSuccess {
                 val recursiveNote = if (dialog.applyRecursively) "（含子目录递归）" else ""
-                state.copy(
-                    folderPage = updatedFolder.copy(
-                        activeDialog = null,
-                        actionNotice = "已更新权限：${dialog.item.name} -> $resolvedOctal$recursiveNote"
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "已更新权限：${dialog.item.name} -> $resolvedOctal$recursiveNote"
+                        )
                     )
-                )
+                }
+                refreshFilePanesSync()
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "权限修改失败：${err.message}"
+                        )
+                    )
+                }
             }
         }
     }
@@ -491,27 +894,115 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     fun startExportToDownload() {
-        val sheet = _uiState.value.folderPage.activeDialog as? FileManagerDialog.ExportSheet ?: return
-        val primaryTarget = sheet.downloadTargets.firstOrNull()?.displayPath
-            ?: DefaultPathProvider.DEFAULT_DOWNLOAD_LABEL
-        launchSimulatedFileProgress(
-            operationTitle = "正在导出至 Download...",
-            targets = sheet.targets,
-            targetDescription = primaryTarget,
-            completionNotice = "已导出 ${sheet.targets.size} 项至 $primaryTarget"
-        )
-    }
-
-    fun startCustomExportToUri(treeUriString: String) {
+        val ctx = appContext ?: return
         val targets = (_uiState.value.folderPage.activeDialog as? FileManagerDialog.ExportSheet)?.targets
             ?: _uiState.value.folderPage.selectedItems
         if (targets.isEmpty()) return
-        launchSimulatedFileProgress(
-            operationTitle = "正在自定义导出...",
-            targets = targets,
-            targetDescription = treeUriString,
-            completionNotice = "已导出 ${targets.size} 项至所选目录：$treeUriString"
-        )
+
+        fileOpJob?.cancel()
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.FileOpProgress(
+                        operationTitle = "正在导出至 Download...",
+                        currentFileName = targets.first().name,
+                        targetDescription = "Download/AICL_Exports",
+                        progressPercent = 0
+                    )
+                )
+            )
+        }
+        fileOpJob = probeScope.launch {
+            val res = fileRepository.exportToDownloads(ctx, targets) { currentFile, percent ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = FileManagerDialog.FileOpProgress(
+                                operationTitle = "正在导出至 Download...",
+                                currentFileName = currentFile,
+                                targetDescription = "Download/AICL_Exports",
+                                progressPercent = percent
+                            )
+                        )
+                    )
+                }
+            }
+            res.onSuccess { exportedPath ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "已导出 ${targets.size} 项至 $exportedPath"
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "导出失败：${err.message}"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun startCustomExportToUri(treeUriString: String) {
+        val ctx = appContext ?: return
+        val targets = (_uiState.value.folderPage.activeDialog as? FileManagerDialog.ExportSheet)?.targets
+            ?: _uiState.value.folderPage.selectedItems
+        if (targets.isEmpty()) return
+
+        fileOpJob?.cancel()
+        _uiState.update { state ->
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = FileManagerDialog.FileOpProgress(
+                        operationTitle = "正在导出至所选目录...",
+                        currentFileName = targets.first().name,
+                        targetDescription = treeUriString,
+                        progressPercent = 0
+                    )
+                )
+            )
+        }
+        fileOpJob = probeScope.launch {
+            val res = fileRepository.exportToSafTree(ctx, treeUriString, targets) { currentFile, percent ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = FileManagerDialog.FileOpProgress(
+                                operationTitle = "正在导出至所选目录...",
+                                currentFileName = currentFile,
+                                targetDescription = treeUriString,
+                                progressPercent = percent
+                            )
+                        )
+                    )
+                }
+            }
+            res.onSuccess { count ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "已导出 $count 项至所选目录"
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        folderPage = state.folderPage.copy(
+                            activeDialog = null,
+                            actionNotice = "SAF 导出失败：${err.message}"
+                        )
+                    )
+                }
+            }
+        }
     }
 
     fun cancelFileOperation() {
@@ -548,86 +1039,21 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
-    private fun launchSimulatedFileProgress(
-        operationTitle: String,
-        targets: List<FileItem>,
-        targetDescription: String,
-        completionNotice: String
-    ) {
-        fileOpJob?.cancel()
-        val firstName = targets.firstOrNull()?.name ?: ""
-        _uiState.update { state ->
-            state.copy(
-                folderPage = state.folderPage.copy(
-                    activeDialog = FileManagerDialog.FileOpProgress(
-                        operationTitle = operationTitle,
-                        currentFileName = firstName,
-                        targetDescription = targetDescription,
-                        progressPercent = 0
-                    )
-                )
-            )
-        }
-        fileOpJob = probeScope.launch {
-            for (step in 10..100 step 10) {
-                if (fileOpStepDelayMs > 0L) {
-                    delay(fileOpStepDelayMs)
-                }
-                if (!isActive) return@launch
-                val currentItem = targets[((step - 1) * targets.size / 100).coerceIn(0, targets.lastIndex)]
-                _uiState.update { state ->
-                    state.copy(
-                        folderPage = state.folderPage.copy(
-                            activeDialog = FileManagerDialog.FileOpProgress(
-                                operationTitle = operationTitle,
-                                currentFileName = currentItem.name,
-                                targetDescription = targetDescription,
-                                progressPercent = step
-                            )
-                        )
-                    )
-                }
-            }
-            _uiState.update { state ->
-                state.copy(
-                    folderPage = state.folderPage.copy(
-                        activeDialog = null,
-                        actionNotice = completionNotice
-                    )
-                )
-            }
-        }
-    }
+    // ==================== Settings & Maintenance ====================
 
     fun selectPythonVersion(version: String) {
-        _uiState.update { state ->
-            state.copy(
-                settingsPage = state.settingsPage.copy(
-                    selectedPythonVersion = version,
-                    statusNotice = "已选择版本：$version"
-                )
-            )
+        updateSettingsState(immediate = false) {
+            it.copy(selectedPythonVersion = version, statusNotice = "已选择版本：$version")
         }
     }
 
     fun triggerPythonDownloadHint() {
-        _uiState.update { state ->
-            state.copy(
-                settingsPage = state.settingsPage.copy(
-                    statusNotice = "已触发 Python 下载指引（模拟状态）"
-                )
-            )
-        }
+        selectTab(MainTab.DOWNLOAD)
     }
 
     fun selectPythonDir(dir: String) {
-        _uiState.update { state ->
-            state.copy(
-                settingsPage = state.settingsPage.copy(
-                    selectedPythonDir = dir,
-                    statusNotice = "已切换目录：$dir"
-                )
-            )
+        updateSettingsState(immediate = false) {
+            it.copy(selectedPythonDir = dir, statusNotice = "已切换目录：$dir")
         }
     }
 
@@ -688,11 +1114,12 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     fun selectThemeMode(theme: String) {
-        updateSettingsState(immediate = false) { it.copy(themeMode = theme, statusNotice = "已切换主题：$theme") }
+        updateSettingsState(immediate = true) { it.copy(themeMode = theme, statusNotice = "已切换主题：$theme") }
     }
 
     fun toggleShowHiddenFiles(enabled: Boolean) {
         updateSettingsState(immediate = false) { it.copy(showHiddenFiles = enabled) }
+        refreshFilePanes()
     }
 
     fun toggleAutoCheckUpdate(enabled: Boolean) {
@@ -817,15 +1244,72 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
+    fun refreshCacheSize() {
+        probeScope.launch {
+            refreshCacheSizeSync()
+        }
+    }
+
+    private fun refreshCacheSizeSync() {
+        val ctx = appContext ?: return
+        val bytes = maintenanceManager.calculateCacheSizeBytes(ctx)
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    cacheSizeText = if (bytes == 0L) "0 KB" else formatFileSize(bytes)
+                )
+            )
+        }
+    }
+
     fun triggerCleanTempFiles() {
-        _uiState.update {
-            it.copy(settingsPage = it.settingsPage.copy(statusNotice = "已清理临时文件（模拟操作）"))
+        val ctx = appContext ?: return
+        probeScope.launch {
+            val res = maintenanceManager.clearCache(ctx)
+            res.onSuccess { (freed, remaining) ->
+                val freedLabel = if (freed == 0L) "0 KB" else formatFileSize(freed)
+                val remLabel = if (remaining == 0L) "0 KB" else formatFileSize(remaining)
+                _uiState.update { state ->
+                    state.copy(
+                        settingsPage = state.settingsPage.copy(
+                            cacheSizeText = remLabel,
+                            statusNotice = "已清理缓存：释放 $freedLabel"
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        settingsPage = state.settingsPage.copy(
+                            statusNotice = "清理缓存失败：${err.message}"
+                        )
+                    )
+                }
+            }
         }
     }
 
     fun triggerExportLogs() {
-        _uiState.update {
-            it.copy(settingsPage = it.settingsPage.copy(statusNotice = "已导出运行日志（模拟操作）"))
+        val ctx = appContext ?: return
+        probeScope.launch {
+            val res = maintenanceManager.exportLogcatToDownloads(ctx)
+            res.onSuccess { savedPath ->
+                _uiState.update { state ->
+                    state.copy(
+                        settingsPage = state.settingsPage.copy(
+                            statusNotice = "已导出 Logcat 至：$savedPath"
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        settingsPage = state.settingsPage.copy(
+                            statusNotice = "导出日志失败：${err.message}"
+                        )
+                    )
+                }
+            }
         }
     }
 
@@ -944,7 +1428,7 @@ class MainViewModel @JvmOverloads constructor(
     private fun updateDownloadFilter(transform: (DownloadFilterState) -> DownloadFilterState) {
         _uiState.update { state ->
             val nextFilter = transform(state.downloadPage.filter)
-            val filtered = DownloadCatalogPreviewFactory.filterItems(state.downloadPage.allItems, nextFilter)
+            val filtered = DownloadCatalogFilter.filterItems(state.downloadPage.allItems, nextFilter)
             state.copy(
                 downloadPage = state.downloadPage.copy(
                     filter = nextFilter,

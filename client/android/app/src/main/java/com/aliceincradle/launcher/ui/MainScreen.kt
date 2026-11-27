@@ -18,6 +18,8 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -48,16 +50,38 @@ fun MainScreen(viewModel: MainViewModel) {
     Scaffold(
         floatingActionButton = {
             if (uiState.selectedTab != MainTab.FILES) {
+                val activeDownloads = uiState.downloadPage.activeDownloadCount
                 FloatingActionButton(
                     onClick = {
-                        Toast.makeText(context, "游戏启动逻辑待接入", Toast.LENGTH_SHORT).show()
+                        if (activeDownloads > 0) {
+                            viewModel.selectTab(MainTab.DOWNLOAD)
+                        } else {
+                            Toast.makeText(context, "容器启动逻辑尚未接入", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     modifier = Modifier.testTag("home_play_fab")
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.PlayArrow,
-                        contentDescription = "启动"
-                    )
+                    if (activeDownloads > 0) {
+                        BadgedBox(
+                            badge = {
+                                Badge(
+                                    modifier = Modifier.testTag("home_fab_download_badge")
+                                ) {
+                                    Text(text = activeDownloads.toString())
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Download,
+                                contentDescription = "下载中 $activeDownloads"
+                            )
+                        }
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = "启动"
+                        )
+                    }
                 }
             }
         },
@@ -101,6 +125,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 onIncludeCompatibleChange = { viewModel.toggleIncludeCompatibleMods(it) },
                 onIncludeFeaturedChange = { viewModel.toggleIncludeFeaturedMods(it) },
                 onDownloadClick = { viewModel.triggerCatalogDownload(it) },
+                onRefreshCatalog = { viewModel.refreshDownloadCatalog() },
                 onDetailClick = { viewModel.openCatalogItemDetail(it) },
                 onDismissDetail = { viewModel.dismissCatalogItemDetail() },
                 modifier = contentModifier
@@ -110,9 +135,17 @@ fun MainScreen(viewModel: MainViewModel) {
                 state = uiState.folderPage,
                 onSelectPane = { viewModel.selectFilePane(it) },
                 onToggleSelection = { side, id -> viewModel.toggleFileSelection(side, id) },
+                onOpenFolder = { side, item -> viewModel.navigateIntoFolder(side, item) },
+                onNavigateUp = { side -> viewModel.navigateUp(side) },
+                onSwitchPaneFromSaf = { side, uri -> viewModel.switchPaneDirectoryFromSaf(side, uri) },
+                onRefreshPermission = { viewModel.refreshAllFilesPermission() },
+                onCreateClick = { viewModel.openCreateEntryDialog() },
+                onCreateDialogChange = { isFolder, draft -> viewModel.updateCreateEntryDialog(isFolder, draft) },
+                onConfirmCreate = { viewModel.confirmCreateEntry() },
                 onRenameClick = { viewModel.openRenameDialog() },
                 onDeleteClick = { viewModel.openDeleteConfirmDialog() },
                 onCopyClick = { viewModel.startCopySelectedFiles() },
+                onPasteClick = { viewModel.pasteClipboardToActivePane() },
                 onInfoClick = { viewModel.openPropertiesDialog() },
                 onExportClick = { viewModel.openExportSheet() },
                 onRenameDraftChange = { viewModel.updateRenameDraft(it) },

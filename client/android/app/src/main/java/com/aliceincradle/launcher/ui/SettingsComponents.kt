@@ -502,21 +502,19 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = {
-                            onCleanTempFiles()
-                            Toast.makeText(context, "已清理临时文件（模拟）", Toast.LENGTH_SHORT).show()
-                        },
+                        onClick = onCleanTempFiles,
                         modifier = Modifier
                             .weight(1f)
                             .testTag("settings_clean_temp_button")
                     ) {
-                        Text(text = "清理临时文件")
+                        Text(
+                            text = "清理缓存 (${state.cacheSizeText})",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                     OutlinedButton(
-                        onClick = {
-                            onExportLogs()
-                            Toast.makeText(context, "已导出日志（模拟）", Toast.LENGTH_SHORT).show()
-                        },
+                        onClick = onExportLogs,
                         modifier = Modifier
                             .weight(1f)
                             .testTag("settings_export_logs_button")

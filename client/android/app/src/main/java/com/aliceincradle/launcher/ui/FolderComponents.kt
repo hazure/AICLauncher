@@ -1,5 +1,9 @@
 package com.aliceincradle.launcher.ui
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -28,6 +32,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
@@ -71,7 +78,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -90,9 +101,17 @@ fun FolderScreen(
     state: FolderPageState,
     onSelectPane: (FilePaneSide) -> Unit,
     onToggleSelection: (FilePaneSide, String) -> Unit,
+    onOpenFolder: (FilePaneSide, FileItem) -> Unit,
+    onNavigateUp: (FilePaneSide) -> Unit,
+    onSwitchPaneFromSaf: (FilePaneSide, String) -> Unit,
+    onRefreshPermission: () -> Unit,
+    onCreateClick: () -> Unit,
+    onCreateDialogChange: (Boolean, String) -> Unit,
+    onConfirmCreate: () -> Unit,
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onCopyClick: () -> Unit,
+    onPasteClick: () -> Unit,
     onInfoClick: () -> Unit,
     onExportClick: () -> Unit,
     onRenameDraftChange: (String) -> Unit,
@@ -111,11 +130,19 @@ fun FolderScreen(
 ) {
     val leftListState = rememberLazyListState()
     val rightListState = rememberLazyListState()
+    val context = LocalContext.current
     val safTreeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
             onCustomExportToUri(uri.toString())
+        }
+    }
+    val safPanePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            onSwitchPaneFromSaf(state.activePane, uri.toString())
         }
     }
 
@@ -125,6 +152,32 @@ fun FolderScreen(
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        if (!state.hasAllFilesAccess && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        runCatching {
+                            val intent = Intent(
+                                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                            context.startActivity(intent)
+                        }
+                        onRefreshPermission()
+                    },
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer
+            ) {
+                Text(
+                    text = "当前仅访问应用沙盒目录，点击授予“全部文件访问权限”以浏览手机存储",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+        }
+
         state.actionNotice?.let { notice ->
             Surface(
                 modifier = Modifier
@@ -161,26 +214,38 @@ fun FolderScreen(
                 listTag = "folder_left_lazy_column",
                 scrollbarTag = "left_vertical_scrollbar",
                 thumbTag = "left_scrollbar_thumb",
-                onHeaderClick = { onSelectPane(FilePaneSide.LEFT) },
-                onRowClick = { itemId -> onToggleSelection(FilePaneSide.LEFT, itemId) },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            )
+            onHeaderClick = { onSelectPane(FilePaneSide.LEFT) },
+            onNavigateUp = { onNavigateUp(FilePaneSide.LEFT) },
+            onPickDirectory = {
+                onSelectPane(FilePaneSide.LEFT)
+                safPanePickerLauncher.launch(null)
+            },
+            onRowClick = { itemId -> onToggleSelection(FilePaneSide.LEFT, itemId) },
+            onOpenFolder = { item -> onOpenFolder(FilePaneSide.LEFT, item) },
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+        )
 
-            FilePaneColumn(
-                pathText = state.targetPath,
-                isActive = state.activePane == FilePaneSide.RIGHT,
-                items = state.targetItems,
-                listState = rightListState,
-                paneTag = "folder_right_pane",
-                headerTag = "folder_target_path",
-                listTag = "folder_right_lazy_column",
-                scrollbarTag = "right_vertical_scrollbar",
-                thumbTag = "right_scrollbar_thumb",
-                onHeaderClick = { onSelectPane(FilePaneSide.RIGHT) },
-                onRowClick = { itemId -> onToggleSelection(FilePaneSide.RIGHT, itemId) },
-                modifier = Modifier
+        FilePaneColumn(
+            pathText = state.targetPath,
+            isActive = state.activePane == FilePaneSide.RIGHT,
+            items = state.targetItems,
+            listState = rightListState,
+            paneTag = "folder_right_pane",
+            headerTag = "folder_target_path",
+            listTag = "folder_right_lazy_column",
+            scrollbarTag = "right_vertical_scrollbar",
+            thumbTag = "right_scrollbar_thumb",
+            onHeaderClick = { onSelectPane(FilePaneSide.RIGHT) },
+            onNavigateUp = { onNavigateUp(FilePaneSide.RIGHT) },
+            onPickDirectory = {
+                onSelectPane(FilePaneSide.RIGHT)
+                safPanePickerLauncher.launch(null)
+            },
+            onRowClick = { itemId -> onToggleSelection(FilePaneSide.RIGHT, itemId) },
+            onOpenFolder = { item -> onOpenFolder(FilePaneSide.RIGHT, item) },
+            modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
             )
@@ -221,9 +286,12 @@ fun FolderScreen(
 
         FileManagerBottomActionBar(
             enabled = state.hasSelection,
+            hasClipboard = state.hasClipboard,
+            onCreateClick = onCreateClick,
             onRenameClick = onRenameClick,
             onDeleteClick = onDeleteClick,
             onCopyClick = onCopyClick,
+            onPasteClick = onPasteClick,
             onInfoClick = onInfoClick,
             onExportClick = onExportClick
         )
@@ -265,6 +333,12 @@ fun FolderScreen(
             onLaunchCustomFolderPicker = { safTreeLauncher.launch(null) },
             onDismiss = onDismissDialog
         )
+        is FileManagerDialog.CreateEntry -> CreateEntryDialog(
+            dialog = dialog,
+            onChange = onCreateDialogChange,
+            onConfirm = onConfirmCreate,
+            onDismiss = onDismissDialog
+        )
     }
 }
 
@@ -280,7 +354,10 @@ private fun FilePaneColumn(
     scrollbarTag: String,
     thumbTag: String,
     onHeaderClick: () -> Unit,
+    onNavigateUp: () -> Unit,
+    onPickDirectory: () -> Unit,
     onRowClick: (String) -> Unit,
+    onOpenFolder: (FileItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val borderColor = if (isActive) {
@@ -337,6 +414,20 @@ private fun FilePaneColumn(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+                    Icon(
+                        imageVector = Icons.Default.ArrowUpward,
+                        contentDescription = "上级目录",
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clickable(onClick = onNavigateUp)
+                    )
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = "选择目录",
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clickable(onClick = onPickDirectory)
+                    )
                 }
             }
 
@@ -359,7 +450,8 @@ private fun FilePaneColumn(
                         FilePaneRow(
                             item = item,
                             isPaneActive = isActive,
-                            onClick = { onRowClick(item.id) }
+                            onClick = { onRowClick(item.id) },
+                            onOpenFolder = { onOpenFolder(item) }
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     }
@@ -383,7 +475,8 @@ private fun FilePaneColumn(
 private fun FilePaneRow(
     item: FileItem,
     isPaneActive: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onOpenFolder: () -> Unit
 ) {
     val bgColor = when {
         item.isSelected && isPaneActive -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
@@ -420,6 +513,7 @@ private fun FilePaneRow(
                     tint = tint,
                     modifier = Modifier
                         .size(22.dp)
+                        .let { mod -> if (item.isFolder) mod.clickable(onClick = onOpenFolder) else mod }
                         .testTag("folder_item_icon_${item.id}")
                 )
             }
@@ -471,9 +565,12 @@ private fun FilePaneRow(
 @Composable
 private fun FileManagerBottomActionBar(
     enabled: Boolean,
+    hasClipboard: Boolean,
+    onCreateClick: () -> Unit,
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onCopyClick: () -> Unit,
+    onPasteClick: () -> Unit,
     onInfoClick: () -> Unit,
     onExportClick: () -> Unit
 ) {
@@ -481,11 +578,18 @@ private fun FileManagerBottomActionBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .padding(horizontal = 4.dp, vertical = 6.dp)
                 .testTag("file_bottom_action_bar"),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            ActionIconButton(
+                icon = Icons.Default.Add,
+                contentDescription = "新建",
+                enabled = true,
+                testTag = "file_action_create",
+                onClick = onCreateClick
+            )
             ActionIconButton(
                 icon = Icons.Default.Edit,
                 contentDescription = "重命名",
@@ -506,6 +610,13 @@ private fun FileManagerBottomActionBar(
                 enabled = enabled,
                 testTag = "file_action_copy",
                 onClick = onCopyClick
+            )
+            ActionIconButton(
+                icon = Icons.Default.ContentPaste,
+                contentDescription = "粘贴",
+                enabled = hasClipboard,
+                testTag = "file_action_paste",
+                onClick = onPasteClick
             )
             ActionIconButton(
                 icon = Icons.Default.Info,
@@ -1158,4 +1269,53 @@ private fun resolveEntryIcon(item: FileItem): Triple<ImageVector, Color, String>
             "文件"
         )
     }
+}
+
+
+@Composable
+private fun CreateEntryDialog(
+    dialog: FileManagerDialog.CreateEntry,
+    onChange: (Boolean, String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = if (dialog.isFolder) "新建文件夹" else "新建文件") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { onChange(false, dialog.draftName) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(text = if (!dialog.isFolder) "✓ 文件" else "文件")
+                    }
+                    OutlinedButton(
+                        onClick = { onChange(true, dialog.draftName) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(text = if (dialog.isFolder) "✓ 文件夹" else "文件夹")
+                    }
+                }
+                OutlinedTextField(
+                    value = dialog.draftName,
+                    onValueChange = { onChange(dialog.isFolder, it) },
+                    singleLine = true,
+                    label = { Text("名称") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            FilledTonalButton(onClick = onConfirm) {
+                Text(text = "创建")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text(text = "取消")
+            }
+        }
+    )
 }
