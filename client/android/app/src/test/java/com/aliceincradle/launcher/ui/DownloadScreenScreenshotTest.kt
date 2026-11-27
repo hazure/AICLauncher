@@ -15,6 +15,7 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +31,11 @@ class DownloadScreenScreenshotTest {
 
     @get:Rule
     val composeTestRule = createComposeRule()
+
+    @Before
+    fun setUpAntiAliasing() {
+        configureAntiAliasingRenderingHints()
+    }
 
     @Test
     @Config(sdk = [34], qualifiers = "w360dp-h780dp-xhdpi")

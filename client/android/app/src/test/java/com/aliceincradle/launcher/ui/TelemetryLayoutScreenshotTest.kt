@@ -12,6 +12,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,6 +28,11 @@ class TelemetryLayoutScreenshotTest {
 
     @get:Rule
     val composeTestRule = createComposeRule()
+
+    @Before
+    fun setUpAntiAliasing() {
+        configureAntiAliasingRenderingHints()
+    }
 
     @Test
     @Config(sdk = [34], qualifiers = "w360dp-h780dp-xhdpi")

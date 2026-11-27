@@ -28,7 +28,7 @@ import kotlin.math.roundToInt
  */
 internal object TrueTypeFontRenderer {
 
-    private const val FONT_RESOURCE_PATH = "fonts/NotoSansSC-VF.ttf"
+    private const val FONT_RESOURCE_PATH = "fonts/HarmonyOS_Sans_SC_Regular.ttf"
 
     private val loadedFont: TrueTypeFont? by lazy {
         try {
@@ -219,12 +219,31 @@ internal object TrueTypeFontRenderer {
     }
 }
 
+private val cachedRenderingHints: Any? by lazy {
+    System.setProperty("awt.useSystemAAFontSettings", "on")
+    System.setProperty("swing.aatext", "true")
+    runCatching {
+        val hintsClass = Class.forName("java.awt.RenderingHints")
+        val hintMap = mapOf(
+            hintsClass.getField("KEY_TEXT_ANTIALIASING").get(null) to hintsClass.getField("VALUE_TEXT_ANTIALIAS_ON").get(null),
+            hintsClass.getField("KEY_ANTIALIASING").get(null) to hintsClass.getField("VALUE_ANTIALIAS_ON").get(null),
+            hintsClass.getField("KEY_FRACTIONALMETRICS").get(null) to hintsClass.getField("VALUE_FRACTIONALMETRICS_ON").get(null),
+            hintsClass.getField("KEY_RENDERING").get(null) to hintsClass.getField("VALUE_RENDER_QUALITY").get(null)
+        )
+        hintsClass.getConstructor(Map::class.java).newInstance(hintMap)
+    }.onFailure { err ->
+        System.err.println("[TrueTypeFontRenderer] RenderingHints unavailable: ${err.message}")
+    }.getOrNull()
+}
+
+internal fun configureAntiAliasingRenderingHints(): Any? = cachedRenderingHints
+
 private val cachedTestFontFamily: FontFamily by lazy {
     runCatching {
         val stream = TrueTypeFontRenderer::class.java.classLoader
-            ?.getResourceAsStream("fonts/NotoSansSC-VF.ttf")
+            ?.getResourceAsStream("fonts/HarmonyOS_Sans_SC_Regular.ttf")
             ?: return@runCatching FontFamily.SansSerif
-        val tempFile = File.createTempFile("aicl_test_noto_sc_", ".ttf").apply {
+        val tempFile = File.createTempFile("aicl_test_harmonyos_sc_", ".ttf").apply {
             deleteOnExit()
         }
         stream.use { input ->
@@ -359,8 +378,9 @@ private class TrueTypeFont private constructor(
         val height = (y1 - y0).coerceAtLeast(1)
 
         val accum = FloatArray(width * height)
-        val subSamples = 4
+        val subSamples = 8
         val invSub = 1f / subSamples.toFloat()
+        val boldExpand = if (isBold) max(0.25f, textSize * 0.018f) else 0f
 
         for (py in 0 until height) {
             val worldPy = (y0 + py).toFloat()
@@ -370,8 +390,8 @@ private class TrueTypeFont private constructor(
                 val spans = scanlineNonZeroSpans(scanY, edges)
                 var i = 0
                 while (i + 1 < spans.size) {
-                    val sx0 = spans[i] - x0
-                    val sx1 = spans[i + 1] - x0
+                    val sx0 = spans[i] - boldExpand - x0
+                    val sx1 = spans[i + 1] + boldExpand - x0
                     val ix0 = floor(sx0).toInt().coerceIn(0, width - 1)
                     val ix1 = floor(sx1).toInt().coerceIn(0, width - 1)
                     for (px in ix0..ix1) {
@@ -386,20 +406,8 @@ private class TrueTypeFont private constructor(
         }
 
         val alpha = ByteArray(width * height)
-        if (isBold) {
-            for (py in 0 until height) {
-                val rowOff = py * width
-                for (px in 0 until width) {
-                    val c0 = accum[rowOff + px]
-                    val cLeft = if (px > 0) accum[rowOff + px - 1] * 0.65f else 0f
-                    val v = max(c0, cLeft).coerceIn(0f, 1f)
-                    alpha[rowOff + px] = (v * 255f).roundToInt().coerceIn(0, 255).toByte()
-                }
-            }
-        } else {
-            for (idx in accum.indices) {
-                alpha[idx] = (accum[idx].coerceIn(0f, 1f) * 255f).roundToInt().coerceIn(0, 255).toByte()
-            }
+        for (idx in accum.indices) {
+            alpha[idx] = (accum[idx].coerceIn(0f, 1f) * 255f).roundToInt().coerceIn(0, 255).toByte()
         }
 
         val result = RasterizedGlyph(x0, y0, width, height, alpha)
@@ -485,7 +493,7 @@ private class TrueTypeFont private constructor(
                 val p2y = -endY * scale
 
                 val dist = abs(p1x - (p0x + p2x) * 0.5f) + abs(p1y - (p0y + p2y) * 0.5f)
-                val steps = max(2, min(12, ceil(dist * 1.5f).toInt()))
+                val steps = max(4, min(16, ceil(dist * 2.5f).toInt()))
                 for (step in 1..steps) {
                     val t = step.toFloat() / steps.toFloat()
                     val omt = 1f - t

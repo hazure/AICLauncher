@@ -1898,21 +1898,39 @@ private fun fillPolygonContours(
     var touchedL = surface.width
     var touchedR = 0
 
+    val spanWidth = clipR - clipL
+    if (spanWidth <= 0 || minY >= maxY) return
+    val rowCov = FloatArray(spanWidth)
+
     for (py in minY until maxY) {
-        val nodes = scanlineNodes(py + 0.5f, edges, evenOdd)
-        val rowOff = py * surface.width
-        var i = 0
-        while (i + 1 < nodes.size) {
-            val x0 = max(clipL, floor(nodes[i]).toInt()).coerceIn(0, surface.width)
-            val x1 = min(clipR, ceil(nodes[i + 1]).toInt()).coerceIn(0, surface.width)
-            if (x0 < touchedL) touchedL = x0
-            if (x1 > touchedR) touchedR = x1
-            for (px in x0 until x1) {
-                if (activeClip == null || activeClip.contains(px, py)) {
-                    surface.pixels[rowOff + px] = blendSrcOver(surface.pixels[rowOff + px], argb)
+        rowCov.fill(0f)
+        for (s in 0 until 4) {
+            val nodes = scanlineNodes(py + (s + 0.5f) * 0.25f, edges, evenOdd)
+            var i = 0
+            while (i + 1 < nodes.size) {
+                val sx0 = nodes[i]
+                val sx1 = nodes[i + 1]
+                val x0 = max(clipL, floor(sx0).toInt()).coerceIn(0, surface.width)
+                val x1 = min(clipR, ceil(sx1).toInt()).coerceIn(0, surface.width)
+                for (px in x0 until x1) {
+                    val cov = (min(px + 1f, sx1) - max(px.toFloat(), sx0)).coerceIn(0f, 1f)
+                    if (cov > 0f) {
+                        rowCov[px - clipL] += cov * 0.25f
+                    }
                 }
+                i += 2
             }
-            i += 2
+        }
+        val rowOff = py * surface.width
+        for (idx in 0 until spanWidth) {
+            val cov = rowCov[idx]
+            if (cov <= 0f) continue
+            val px = clipL + idx
+            if (activeClip == null || activeClip.contains(px, py)) {
+                if (px < touchedL) touchedL = px
+                if (px + 1 > touchedR) touchedR = px + 1
+                surface.pixels[rowOff + px] = blendWithMode(surface.pixels[rowOff + px], argb, cov, null)
+            }
         }
     }
     if (touchedL < touchedR && minY < maxY) {
