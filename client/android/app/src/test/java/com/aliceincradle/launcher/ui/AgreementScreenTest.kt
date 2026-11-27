@@ -11,6 +11,8 @@ import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.aliceincradle.launcher.data.AgreementManager
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -50,8 +52,14 @@ class AgreementScreenTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("免责声明与用户协议").assertIsDisplayed()
-        composeTestRule.onNodeWithText("我已年满18岁或具备独立操作能力，并已仔细阅读上述声明").assertIsDisplayed()
+        composeTestRule.onNodeWithText("AICL 使用协议与免责声明").assertIsDisplayed()
+        composeTestRule.onNodeWithText("0. 此项目初始化需要联网，会收集<...>以上信息，用于检查<...>操作。").assertIsDisplayed()
+        composeTestRule.onNodeWithText("1. 不帮助未成年人。").assertIsDisplayed()
+        composeTestRule.onNodeWithText("2. 不允许未成年人接触此软件。").assertIsDisplayed()
+        composeTestRule.onNodeWithText("3. 此项目仅供学习，下载后请在24小时内自行删除！").assertIsDisplayed()
+        composeTestRule.onNodeWithText("4. 与 AIC 官方无关，绝不接受任何来自 AICL 以外 Issue。").assertIsDisplayed()
+        composeTestRule.onNodeWithText("5. 请勿骚扰 AIC 官方，一旦发现，本项目将封禁此用户使用本软件。").assertIsDisplayed()
+        composeTestRule.onNodeWithText("我已阅读并同意上述声明与风险").assertIsDisplayed()
         composeTestRule.onNodeWithTag("agreement_agree_button").assertIsNotEnabled()
         composeTestRule.onNodeWithTag("agreement_exit_button").assertIsEnabled()
 
@@ -66,13 +74,15 @@ class AgreementScreenTest {
     }
 
     @Test
-    fun agreementPersistsAcrossManagerInstances() {
+    fun agreementPersistsAcrossManagerInstances() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val firstManager = AgreementManager(context)
-        assertFalse("Initial agreement state must be false", firstManager.isAgreed())
+        assertFalse("Initial agreement state must be false", firstManager.isAgreed.first())
 
-        firstManager.setAgreed(true)
+        firstManager.saveAgreed()
+        assertTrue("Flow must emit true after saveAgreed()", firstManager.isAgreed.first())
+
         val secondManager = AgreementManager(context)
-        assertTrue("Agreement state must persist across restarts", secondManager.isAgreed())
+        assertTrue("Agreement state must persist across restarts", secondManager.isAgreed.first())
     }
 }
