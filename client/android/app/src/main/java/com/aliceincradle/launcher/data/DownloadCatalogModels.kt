@@ -2,6 +2,7 @@ package com.aliceincradle.launcher.data
 
 enum class DownloadContentStatus {
     AVAILABLE,
+    PREPARING,
     QUEUED,
     DOWNLOADING,
     DOWNLOADED,
@@ -29,7 +30,8 @@ data class DownloadCatalogItem(
     val progressPercent: Int = 0,
     val downloadedBytes: Long = 0L,
     val localFilePath: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val isMirrorSniffTarget: Boolean = false
 )
 
 data class DownloadFilterState(
@@ -53,11 +55,14 @@ data class DownloadPageState(
     val items: List<DownloadCatalogItem> = emptyList(),
     val selectedDetailItem: DownloadCatalogItem? = null,
     val isLoadingCatalog: Boolean = false,
-    val catalogError: String? = null
+    val catalogError: String? = null,
+    val mirrorSniffError: String? = null
 ) {
     val activeDownloadCount: Int
         get() = allItems.count {
-            it.status == DownloadContentStatus.QUEUED || it.status == DownloadContentStatus.DOWNLOADING
+            it.status == DownloadContentStatus.PREPARING ||
+                it.status == DownloadContentStatus.QUEUED ||
+                it.status == DownloadContentStatus.DOWNLOADING
         }
 }
 

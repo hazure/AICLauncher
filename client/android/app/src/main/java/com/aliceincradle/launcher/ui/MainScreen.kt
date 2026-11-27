@@ -1,6 +1,11 @@
 package com.aliceincradle.launcher.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
+import androidx.core.content.FileProvider
+import com.aliceincradle.launcher.data.MirrorLinkSniffer
+import java.io.File
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -125,6 +130,38 @@ fun MainScreen(viewModel: MainViewModel) {
                 onIncludeCompatibleChange = { viewModel.toggleIncludeCompatibleMods(it) },
                 onIncludeFeaturedChange = { viewModel.toggleIncludeFeaturedMods(it) },
                 onDownloadClick = { viewModel.triggerCatalogDownload(it) },
+                onCancelDownload = { viewModel.cancelCatalogDownload(it) },
+                onOpenDownloadedFile = { item ->
+                    val path = item.localFilePath
+                    if (!path.isNullOrBlank()) {
+                        runCatching {
+                            val file = File(path)
+                            val uri = FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.fileprovider",
+                                file
+                            )
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, "*/*")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(intent, "打开或安装"))
+                        }.onFailure {
+                            Toast.makeText(context, "无法打开文件：$path", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                onOpenCienFallback = {
+                    runCatching {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse(MirrorLinkSniffer.CIEN_FALLBACK_URL)
+                        )
+                        context.startActivity(intent)
+                    }.onFailure {
+                        Toast.makeText(context, "未找到可用浏览器", Toast.LENGTH_SHORT).show()
+                    }
+                },
                 onRefreshCatalog = { viewModel.refreshDownloadCatalog() },
                 onDetailClick = { viewModel.openCatalogItemDetail(it) },
                 onDismissDetail = { viewModel.dismissCatalogItemDetail() },

@@ -64,6 +64,9 @@ fun DownloadScreen(
     onIncludeCompatibleChange: (Boolean) -> Unit,
     onIncludeFeaturedChange: (Boolean) -> Unit,
     onDownloadClick: (String) -> Unit,
+    onCancelDownload: (String) -> Unit,
+    onOpenDownloadedFile: (DownloadCatalogItem) -> Unit,
+    onOpenCienFallback: () -> Unit,
     onRefreshCatalog: () -> Unit,
     onDetailClick: (DownloadCatalogItem) -> Unit,
     onDismissDetail: () -> Unit,
@@ -115,6 +118,36 @@ fun DownloadScreen(
             }
         }
 
+        state.mirrorSniffError?.let { errorMsg ->
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("download_mirror_error_card"),
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.errorContainer
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = errorMsg,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    OutlinedButton(
+                        onClick = onOpenCienFallback,
+                        modifier = Modifier.testTag("download_cien_fallback_button")
+                    ) {
+                        Text(text = "前往官方 ci-en 发布页")
+                    }
+                }
+            }
+        }
+
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -147,6 +180,8 @@ fun DownloadScreen(
                         DownloadCatalogRowCard(
                             item = item,
                             onDownloadClick = onDownloadClick,
+                            onCancelDownload = onCancelDownload,
+                            onOpenDownloadedFile = onOpenDownloadedFile,
                             onDetailClick = onDetailClick
                         )
                     }
@@ -306,12 +341,16 @@ private fun FilterCheckboxItem(
 private fun DownloadCatalogRowCard(
     item: DownloadCatalogItem,
     onDownloadClick: (String) -> Unit,
+    onCancelDownload: (String) -> Unit,
+    onOpenDownloadedFile: (DownloadCatalogItem) -> Unit,
     onDetailClick: (DownloadCatalogItem) -> Unit
 ) {
     val (statusIcon, statusTint, statusDesc) = when (item.status) {
         DownloadContentStatus.DOWNLOADED -> Triple(Icons.Default.Check, Color(0xFF2E7D32), "已下载")
         DownloadContentStatus.AVAILABLE -> Triple(Icons.Default.Download, Color(0xFF1565C0), "可下载")
-        DownloadContentStatus.QUEUED, DownloadContentStatus.DOWNLOADING -> Triple(Icons.Default.Download, Color(0xFFEF6C00), "下载中")
+        DownloadContentStatus.PREPARING,
+        DownloadContentStatus.QUEUED,
+        DownloadContentStatus.DOWNLOADING -> Triple(Icons.Default.Download, Color(0xFFEF6C00), "下载中")
         DownloadContentStatus.FAILED -> Triple(Icons.Default.ErrorOutline, Color(0xFFC62828), "下载失败")
         DownloadContentStatus.DISABLED -> Triple(Icons.Default.Block, Color(0xFF757575), "已禁用或不兼容")
     }
@@ -353,11 +392,32 @@ private fun DownloadCatalogRowCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (item.status == DownloadContentStatus.DOWNLOADING || item.status == DownloadContentStatus.QUEUED) {
-                    LinearProgressIndicator(
-                        progress = { (item.progressPercent / 100f).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                if (item.status == DownloadContentStatus.PREPARING) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                } else if (item.status == DownloadContentStatus.DOWNLOADING || item.status == DownloadContentStatus.QUEUED) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { (item.progressPercent / 100f).coerceIn(0f, 1f) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = { onCancelDownload(item.id) },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .heightIn(min = 28.dp)
+                                .testTag("download_cancel_${item.id}")
+                        ) {
+                            Text(
+                                text = "取消",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
                 }
                 if (item.status == DownloadContentStatus.FAILED && !item.errorMessage.isNullOrBlank()) {
                     Text(
@@ -372,18 +432,27 @@ private fun DownloadCatalogRowCard(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val canOpenDownloaded = item.status == DownloadContentStatus.DOWNLOADED && !item.localFilePath.isNullOrBlank()
                     val actionEnabled = item.status == DownloadContentStatus.AVAILABLE ||
-                        item.status == DownloadContentStatus.FAILED
+                        item.status == DownloadContentStatus.FAILED ||
+                        canOpenDownloaded
                     val actionLabel = when (item.status) {
-                        DownloadContentStatus.DOWNLOADED -> "已下载"
+                        DownloadContentStatus.DOWNLOADED -> if (canOpenDownloaded) "安装/查看" else "已下载"
+                        DownloadContentStatus.PREPARING -> "准备中..."
                         DownloadContentStatus.QUEUED -> "排队中"
-                        DownloadContentStatus.DOWNLOADING -> "${item.progressPercent}%"
+                        DownloadContentStatus.DOWNLOADING -> "下载中 ${item.progressPercent}%"
                         DownloadContentStatus.FAILED -> "重试"
                         DownloadContentStatus.DISABLED -> "不可用"
                         DownloadContentStatus.AVAILABLE -> "下载"
                     }
                     OutlinedButton(
-                        onClick = { onDownloadClick(item.id) },
+                        onClick = {
+                            if (canOpenDownloaded) {
+                                onOpenDownloadedFile(item)
+                            } else {
+                                onDownloadClick(item.id)
+                            }
+                        },
                         enabled = actionEnabled,
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                         modifier = Modifier.heightIn(min = 32.dp)

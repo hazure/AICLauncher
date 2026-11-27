@@ -10,6 +10,7 @@ import java.net.URL
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -234,6 +235,7 @@ interface DownloadProgressListener {
     fun onProgress(itemId: String, downloadedBytes: Long, totalBytes: Long, percent: Int)
     fun onCompleted(itemId: String, file: File)
     fun onFailed(itemId: String, errorMessage: String)
+    fun onCancelled(itemId: String) {}
 }
 
 /**
@@ -249,6 +251,7 @@ class DownloadQueueManager(
 ) {
     private val queue = Channel<DownloadRequest>(Channel.UNLIMITED)
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val activePartFiles = ConcurrentHashMap<String, File>()
     @Volatile
     private var listener: DownloadProgressListener? = null
 
@@ -260,14 +263,25 @@ class DownloadQueueManager(
                     if (job != null) {
                         activeJobs[request.itemId] = job
                     }
+                    val partFile = File(request.destFile.parentFile, "${request.destFile.name}.part")
+                    activePartFiles[request.itemId] = partFile
                     try {
                         listener?.onStarted(request.itemId)
                         streamDownloader(request, requireNotNull(listener))
+                    } catch (e: CancellationException) {
+                        if (partFile.exists()) {
+                            partFile.delete()
+                        }
+                        listener?.onCancelled(request.itemId)
                     } catch (e: Exception) {
+                        if (partFile.exists()) {
+                            partFile.delete()
+                        }
                         SafeProbeIo.warn(TAG, "Download failed for ${request.itemId}", e)
                         listener?.onFailed(request.itemId, e.message ?: "下载失败")
                     } finally {
                         activeJobs.remove(request.itemId)
+                        activePartFiles.remove(request.itemId)
                     }
                 }
             }
@@ -284,6 +298,11 @@ class DownloadQueueManager(
 
     fun cancel(itemId: String) {
         activeJobs[itemId]?.cancel()
+        activePartFiles.remove(itemId)?.let { partFile ->
+            if (partFile.exists()) {
+                partFile.delete()
+            }
+        }
     }
 
     fun close() {
@@ -320,7 +339,7 @@ class DownloadQueueManager(
                 connectTimeout = 15_000
                 readTimeout = 20_000
                 instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "AICL-Android/0.1.0a")
+                setRequestProperty("User-Agent", MirrorLinkSniffer.CHROME_USER_AGENT)
             }
             try {
                 val code = conn.responseCode
