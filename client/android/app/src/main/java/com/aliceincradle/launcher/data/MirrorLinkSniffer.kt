@@ -1,5 +1,6 @@
 package com.aliceincradle.launcher.data
 
+import android.content.Context
 import android.util.Log
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -48,39 +49,77 @@ data class SniffedDownloadLink(
 
 /**
  * Dynamically sniffs the latest Windows archive direct download link from the official mirror.
- * Never hardcodes archive URLs; falls back cleanly to Result.failure when parsing fails.
+ * Plan A: Deep HTML + external <script src="..."> JS extraction.
+ * Plan B: Headless WebView network interception fallback for obfuscated SPAs.
  */
 open class MirrorLinkSniffer(
-    private val httpClient: MirrorHttpClient = DefaultMirrorHttpClient()
+    private val httpClient: MirrorHttpClient = DefaultMirrorHttpClient(),
+    private val webViewInterceptor: MirrorWebViewInterceptor = AndroidWebViewMirrorInterceptor()
 ) {
-    open fun sniffLatestWinLink(): Result<SniffedDownloadLink> {
-        return try {
+    open suspend fun sniffLatestWinLink(context: Context? = null): Result<SniffedDownloadLink> {
+        var htmlPreview = ""
+        try {
             val html = httpClient.fetchText(MIRROR_WIN_URL)
+            htmlPreview = html.take(500)
+
+            // Plan A-1: Direct archive URL in initial HTML
             extractArchiveUrl(html)?.let { directUrl ->
                 val resolved = buildSniffedLink(directUrl, html)
-                logResolvedUrl(resolved.directUrl)
+                logDebug("Extracted URL -> ${resolved.directUrl}")
                 return Result.success(resolved)
             }
 
-            val jsonUrls = JSON_URL_REGEX.findAll(html)
-                .map { it.value }
+            // Plan A-2: Extract <script src="..."> and inspect main JS files
+            val baseUrl = URL(MIRROR_WIN_URL)
+            val scriptUrls = SCRIPT_SRC_REGEX.findAll(html)
+                .mapNotNull { match ->
+                    val rawSrc = match.groupValues.getOrNull(1)?.trim().orEmpty()
+                    if (rawSrc.isBlank() || rawSrc.contains("rocket-loader", ignoreCase = true)) {
+                        null
+                    } else {
+                        runCatching { URL(baseUrl, rawSrc).toString() }.getOrNull()
+                    }
+                }
                 .distinct()
-                .take(3)
+                .take(5)
                 .toList()
-            for (jsonUrl in jsonUrls) {
-                val jsonText = runCatching { httpClient.fetchText(jsonUrl) }.getOrNull() ?: continue
-                extractArchiveUrl(jsonText)?.let { directUrl ->
-                    val resolved = buildSniffedLink(directUrl, jsonText)
-                    logResolvedUrl(resolved.directUrl)
+
+            for (scriptUrl in scriptUrls) {
+                val jsText = runCatching { httpClient.fetchText(scriptUrl) }.getOrNull() ?: continue
+                extractArchiveUrl(jsText)?.let { directUrl ->
+                    val resolved = buildSniffedLink(directUrl, jsText)
+                    logDebug("Extracted URL -> ${resolved.directUrl}")
                     return Result.success(resolved)
                 }
+                val jsonUrls = JSON_URL_REGEX.findAll(jsText).map { it.value }.distinct().take(2).toList()
+                for (jsonUrl in jsonUrls) {
+                    val jsonText = runCatching { httpClient.fetchText(jsonUrl) }.getOrNull() ?: continue
+                    extractArchiveUrl(jsonText)?.let { directUrl ->
+                        val resolved = buildSniffedLink(directUrl, jsonText)
+                        logDebug("Extracted URL -> ${resolved.directUrl}")
+                        return Result.success(resolved)
+                    }
+                }
             }
-
-            Result.failure(IOException("未能从官方镜像站解析出有效下载直链"))
         } catch (e: Exception) {
-            SafeProbeIo.warn(TAG, "Mirror link sniff failed: ${e.message}", e)
-            Result.failure(e)
+            SafeProbeIo.warn(TAG, "Plan A HTML/JS sniff failed: ${e.message}", e)
+            if (context == null) {
+                return Result.failure(e)
+            }
         }
+
+        // Plan B: Headless WebView interception
+        if (context != null) {
+            val webViewResult = webViewInterceptor.intercept(context, MIRROR_WIN_URL, WEBVIEW_TIMEOUT_MS)
+            if (webViewResult.isSuccess) {
+                return webViewResult
+            }
+        }
+
+        if (htmlPreview.isNotBlank()) {
+            logDebug("HTML preview (first 500 chars): $htmlPreview")
+        }
+        return Result.failure(IOException("未能从官方镜像站解析出有效下载直链"))
     }
 
     private fun extractArchiveUrl(text: String): String? {
@@ -104,18 +143,23 @@ open class MirrorLinkSniffer(
         )
     }
 
-    private fun logResolvedUrl(url: String) {
-        runCatching { Log.i(TAG, "Resolved direct download URL: $url") }
-            .onFailure { println("[$TAG] Resolved direct download URL: $url") }
+    private fun logDebug(message: String) {
+        runCatching { Log.d(TAG, message) }
+            .onFailure { println("[$TAG] $message") }
     }
 
     companion object {
         private const val TAG = "MirrorLinkSniffer"
+        private const val WEBVIEW_TIMEOUT_MS = 20_000L
         const val MIRROR_WIN_URL = "https://get.aliceincradle.dev/win/"
         const val CIEN_FALLBACK_URL = "https://ci-en.dlsite.com/creator/12611"
         const val CHROME_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
+        private val SCRIPT_SRC_REGEX = Regex(
+            """<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']""",
+            RegexOption.IGNORE_CASE
+        )
         private val ARCHIVE_URL_REGEX = Regex(
             """https?://[^\s"'<>\\]+?\.(?:zip|7z)(?:\?[^\s"'<>\\]*)?""",
             RegexOption.IGNORE_CASE

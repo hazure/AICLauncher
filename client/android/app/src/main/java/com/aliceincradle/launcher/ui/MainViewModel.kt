@@ -399,7 +399,7 @@ class MainViewModel @JvmOverloads constructor(
                 )
             }
             val sniffJob = probeScope.launch {
-                val sniffResult = mirrorLinkSniffer.sniffLatestWinLink()
+                val sniffResult = mirrorLinkSniffer.sniffLatestWinLink(appContext)
                 sniffResult.onSuccess { sniffed ->
                     val destFile = File(downloadDir, sniffed.fileName)
                     updateCatalogItem(itemId) {

@@ -300,13 +300,18 @@ class MainViewModelTest {
     }
 
     @Test
-    fun mirrorLinkSnifferExtractsArchiveUrlAndHandlesFailureGracefully() {
-        val html = """
-            <html><script>
-            window.__DL_URL__ = "https://cdn.example.com/files/AliceInCradle_ver0.30a.7z?token=abc";
-            </script></html>
+    fun mirrorLinkSnifferExtractsArchiveUrlFromScriptAndHandlesFailureGracefully() = runBlocking {
+        val htmlWithScript = """
+            <html><head><script src="/_js/app.1234.js"></script></head></html>
         """.trimIndent()
-        val sniffer = MirrorLinkSniffer(MirrorHttpClient { html })
+        val jsPayload = """
+            const dl = "https://cdn.example.com/files/AliceInCradle_ver0.30a.7z?token=abc";
+        """.trimIndent()
+        val sniffer = MirrorLinkSniffer(
+            httpClient = MirrorHttpClient { url ->
+                if (url.endsWith(".js")) jsPayload else htmlWithScript
+            }
+        )
         val ok = sniffer.sniffLatestWinLink()
         assertTrue(ok.isSuccess)
         assertEquals("AliceInCradle_ver0.30a.7z", ok.getOrThrow().fileName)
@@ -315,7 +320,9 @@ class MainViewModelTest {
             ok.getOrThrow().directUrl
         )
 
-        val failingSniffer = MirrorLinkSniffer(MirrorHttpClient { throw java.io.IOException("network down") })
+        val failingSniffer = MirrorLinkSniffer(
+            httpClient = MirrorHttpClient { throw java.io.IOException("network down") }
+        )
         val vm = MainViewModel(
             ioDispatcher = Dispatchers.Unconfined,
             autoStartPolling = false,
