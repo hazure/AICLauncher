@@ -9,6 +9,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Region
@@ -19,6 +20,7 @@ import android.view.View
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.Collections
 import java.util.WeakHashMap
 import kotlin.math.PI
 import kotlin.math.abs
@@ -33,6 +35,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tan
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
@@ -48,6 +51,7 @@ import org.robolectric.util.ReflectionHelpers
  * Pure JVM software-rendering shadows and screenshot capture helpers for Arm64/Linux environments
  * where Robolectric native graphics/conscrypt binaries are unavailable.
  */
+
 @Implements(value = Bitmap::class, isInAndroidSdk = true)
 class Arm64BitmapShadow : ShadowLegacyBitmap() {
     companion object {
@@ -141,6 +145,19 @@ class Arm64PaintShadow : ShadowPaint() {
     @Implementation
     fun setXfermode(xfermode: Xfermode?): Xfermode? {
         this.xfermode = xfermode
+        if (xfermode is PorterDuffXfermode) {
+            val mode = runCatching { ReflectionHelpers.getField<PorterDuff.Mode?>(xfermode, "mode") }.getOrNull()
+                ?: runCatching { ReflectionHelpers.getField<PorterDuff.Mode?>(Shadow.extract<Any>(xfermode), "mode") }.getOrNull()
+            this.blendMode = when (mode) {
+                PorterDuff.Mode.CLEAR -> BlendMode.CLEAR
+                PorterDuff.Mode.SRC -> BlendMode.SRC
+                PorterDuff.Mode.SRC_IN -> BlendMode.SRC_IN
+                PorterDuff.Mode.SRC_OVER -> BlendMode.SRC_OVER
+                else -> this.blendMode
+            }
+        } else if (xfermode == null) {
+            this.blendMode = null
+        }
         return xfermode
     }
 
@@ -327,26 +344,27 @@ class Arm64PaintShadow : ShadowPaint() {
         getFontMetricsInt(outMetrics)
     }
 
-    private fun fillAdvances(text: CharSequence, start: Int, end: Int, out: FloatArray, outIndex: Int): Int {
-        val s = start.coerceIn(0, text.length)
-        val e = end.coerceIn(s, text.length)
-        val ts = effectiveTextSize()
-        val sx = max(0f, super.getTextScaleX())
-        val count = min(e - s, max(0, out.size - outIndex))
-        for (i in 0 until count) {
-            out[outIndex + i] = BitmapFontMetrics.charAdvance(text[s + i], ts) * sx
-        }
-        return count
-    }
+    private fun fillAdvances(text: CharSequence, start: Int, end: Int, out: FloatArray, outIndex: Int): Int =
+        fillRangeAdvances(text.length, start, end, out, outIndex, text::get)
 
-    private fun fillCharArrayAdvances(text: CharArray, start: Int, end: Int, out: FloatArray, outIndex: Int): Int {
-        val s = start.coerceIn(0, text.size)
-        val e = end.coerceIn(s, text.size)
+    private fun fillCharArrayAdvances(text: CharArray, start: Int, end: Int, out: FloatArray, outIndex: Int): Int =
+        fillRangeAdvances(text.size, start, end, out, outIndex) { text[it] }
+
+    private inline fun fillRangeAdvances(
+        totalLen: Int,
+        start: Int,
+        end: Int,
+        out: FloatArray,
+        outIndex: Int,
+        charAt: (Int) -> Char
+    ): Int {
+        val s = start.coerceIn(0, totalLen)
+        val e = end.coerceIn(s, totalLen)
         val ts = effectiveTextSize()
         val sx = max(0f, super.getTextScaleX())
         val count = min(e - s, max(0, out.size - outIndex))
         for (i in 0 until count) {
-            out[outIndex + i] = BitmapFontMetrics.charAdvance(text[s + i], ts) * sx
+            out[outIndex + i] = BitmapFontMetrics.charAdvance(charAt(s + i), ts) * sx
         }
         return count
     }
@@ -392,7 +410,8 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
         val clip: PixelClip?,
         val offscreenPixels: IntArray?,
         val layerAlpha: Int,
-        val parentPixels: IntArray?
+        val parentPixels: IntArray?,
+        val layerCompositeClip: PixelClip?
     )
 
     private var boundBitmap: Bitmap? = null
@@ -437,7 +456,8 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
                 clip = clip?.copy(),
                 offscreenPixels = null,
                 layerAlpha = 255,
-                parentPixels = activeOffscreenPixels
+                parentPixels = activeOffscreenPixels,
+                layerCompositeClip = null
             )
         )
         super.save()
@@ -492,21 +512,25 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
         } else {
             null
         }
-        stateStack.addLast(
-            SavedCanvasState(
-                matrix = matrix.copy(),
-                clip = clip?.copy(),
-                offscreenPixels = offscreen,
-                layerAlpha = alpha.coerceIn(0, 255),
-                parentPixels = activeOffscreenPixels
-            )
-        )
+        val prevMatrix = matrix.copy()
+        val prevParent = activeOffscreenPixels
+        val outerClip = clip?.copy()
         if (offscreen != null) {
             activeOffscreenPixels = offscreen
         }
         if (left != null && top != null && right != null && bottom != null && right > left && bottom > top) {
             clipRect(left, top, right, bottom, Region.Op.INTERSECT)
         }
+        stateStack.addLast(
+            SavedCanvasState(
+                matrix = prevMatrix,
+                clip = outerClip,
+                offscreenPixels = offscreen,
+                layerAlpha = alpha.coerceIn(0, 255),
+                parentPixels = prevParent,
+                layerCompositeClip = clip?.copy()
+            )
+        )
         super.save()
         return prevCount
     }
@@ -522,7 +546,7 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
             if (layerBuf != null && saved.layerAlpha > 0) {
                 val surface = resolveSurface()
                 if (surface != null) {
-                    compositeLayerOntoSurface(surface, layerBuf, saved.layerAlpha, clip)
+                    compositeLayerOntoSurface(surface, layerBuf, saved.layerAlpha, saved.layerCompositeClip ?: clip)
                 }
             }
         }
@@ -721,20 +745,16 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
 
     @Implementation
     fun drawColor(color: Int, mode: PorterDuff.Mode) {
-        if (mode == PorterDuff.Mode.CLEAR) {
-            clearDeviceBackground()
-        } else {
-            fillDeviceBackground(color, mode == PorterDuff.Mode.SRC)
+        when (mode) {
+            PorterDuff.Mode.CLEAR -> fillDeviceBackground(0, BlendMode.CLEAR)
+            PorterDuff.Mode.SRC -> fillDeviceBackground(color, BlendMode.SRC)
+            else -> fillDeviceBackground(color, BlendMode.SRC_OVER)
         }
     }
 
     @Implementation
     fun drawColor(color: Int, mode: BlendMode) {
-        if (mode == BlendMode.CLEAR) {
-            clearDeviceBackground()
-        } else {
-            fillDeviceBackground(color, mode == BlendMode.SRC)
-        }
+        fillDeviceBackground(color, mode)
     }
 
     @Implementation
@@ -742,7 +762,7 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
         val surface = resolveSurface() ?: return
         val mode = resolveBlendMode(paint)
         if (mode == BlendMode.CLEAR) {
-            clearRegion(surface, 0, 0, surface.width, surface.height)
+            fillRegion(surface, 0, 0, surface.width, surface.height, 0, BlendMode.CLEAR)
             return
         }
         val argb = effectiveColorArgb(paint) ?: return
@@ -1118,35 +1138,11 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
         )
     }
 
-    private fun clearDeviceBackground() {
-        val surface = resolveSurface() ?: return
-        clearRegion(surface, 0, 0, surface.width, surface.height)
-    }
-
-    private fun clearRegion(surface: RasterSurface, x0: Int, y0: Int, x1: Int, y1: Int) {
-        val activeClip = clip
-        val minX = max(x0, activeClip?.left ?: 0).coerceIn(0, surface.width)
-        val maxX = min(x1, activeClip?.right ?: surface.width).coerceIn(0, surface.width)
-        val minY = max(y0, activeClip?.top ?: 0).coerceIn(0, surface.height)
-        val maxY = min(y1, activeClip?.bottom ?: surface.height).coerceIn(0, surface.height)
-        if (minX >= maxX || minY >= maxY) return
-
-        for (py in minY until maxY) {
-            val rowOff = py * surface.width
-            for (px in minX until maxX) {
-                if (activeClip == null || activeClip.contains(px, py)) {
-                    surface.pixels[rowOff + px] = 0
-                }
-            }
-        }
-        surface.syncRect(minX, minY, maxX, maxY)
-    }
-
-    private fun fillDeviceBackground(argb: Int, replaceSrc: Boolean = false) {
+    private fun fillDeviceBackground(argb: Int, mode: BlendMode = BlendMode.SRC_OVER) {
         val surface = resolveSurface() ?: return
         val alpha = (argb ushr 24) and 0xFF
-        if (alpha == 0 && !replaceSrc) return
-        fillRegion(surface, 0, 0, surface.width, surface.height, argb, if (replaceSrc) BlendMode.SRC else BlendMode.SRC_OVER)
+        if (alpha == 0 && mode == BlendMode.SRC_OVER) return
+        fillRegion(surface, 0, 0, surface.width, surface.height, argb, mode)
     }
 
     private fun fillRegion(
@@ -1165,12 +1161,16 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
         val maxY = min(y1, activeClip?.bottom ?: surface.height).coerceIn(0, surface.height)
         if (minX >= maxX || minY >= maxY) return
 
-        val opaqueFastPath = (activeClip?.hasMask != true) &&
-            (mode == null || mode == BlendMode.SRC || (mode == BlendMode.SRC_OVER && ((argb ushr 24) and 0xFF) == 255))
-        if (opaqueFastPath) {
+        val fillValue = when {
+            activeClip?.hasMask == true -> null
+            mode == BlendMode.CLEAR -> 0
+            mode == null || mode == BlendMode.SRC || (mode == BlendMode.SRC_OVER && ((argb ushr 24) and 0xFF) == 255) -> argb
+            else -> null
+        }
+        if (fillValue != null) {
             for (py in minY until maxY) {
                 val rowOff = py * surface.width
-                surface.pixels.fill(argb, rowOff + minX, rowOff + maxX)
+                surface.pixels.fill(fillValue, rowOff + minX, rowOff + maxX)
             }
         } else {
             for (py in minY until maxY) {
@@ -1225,24 +1225,9 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
         crossinline sdf: (Float, Float) -> Float
     ) {
         val inv = matrix.invert() ?: return
-        val xs = floatArrayOf(
-            matrix.mapX(localLeft, localTop),
-            matrix.mapX(localRight, localTop),
-            matrix.mapX(localRight, localBottom),
-            matrix.mapX(localLeft, localBottom)
-        )
-        val ys = floatArrayOf(
-            matrix.mapY(localLeft, localTop),
-            matrix.mapY(localRight, localTop),
-            matrix.mapY(localRight, localBottom),
-            matrix.mapY(localLeft, localBottom)
-        )
+        val bounds = computeMappedBounds(surface, localLeft, localTop, localRight, localBottom) ?: return
+        val minX = bounds[0]; val minY = bounds[1]; val maxX = bounds[2]; val maxY = bounds[3]
         val activeClip = clip
-        val minX = max(floor(xs.min()).toInt(), activeClip?.left ?: 0).coerceIn(0, surface.width)
-        val maxX = min(ceil(xs.max()).toInt(), activeClip?.right ?: surface.width).coerceIn(0, surface.width)
-        val minY = max(floor(ys.min()).toInt(), activeClip?.top ?: 0).coerceIn(0, surface.height)
-        val maxY = min(ceil(ys.max()).toInt(), activeClip?.bottom ?: surface.height).coerceIn(0, surface.height)
-        if (minX >= maxX || minY >= maxY) return
 
         val pixelScale = max(0.25f, hypot(inv.a, inv.b))
         val baseAlpha = (argb ushr 24) and 0xFF
@@ -1293,24 +1278,9 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
         if (globalAlpha == 0) return
 
         val inv = matrix.invert() ?: return
-        val xs = floatArrayOf(
-            matrix.mapX(dst.left, dst.top),
-            matrix.mapX(dst.right, dst.top),
-            matrix.mapX(dst.right, dst.bottom),
-            matrix.mapX(dst.left, dst.bottom)
-        )
-        val ys = floatArrayOf(
-            matrix.mapY(dst.left, dst.top),
-            matrix.mapY(dst.right, dst.top),
-            matrix.mapY(dst.right, dst.bottom),
-            matrix.mapY(dst.left, dst.bottom)
-        )
+        val bounds = computeMappedBounds(surface, dst.left, dst.top, dst.right, dst.bottom) ?: return
+        val minX = bounds[0]; val minY = bounds[1]; val maxX = bounds[2]; val maxY = bounds[3]
         val activeClip = clip
-        val minX = max(floor(xs.min()).toInt(), activeClip?.left ?: 0).coerceIn(0, surface.width)
-        val maxX = min(ceil(xs.max()).toInt(), activeClip?.right ?: surface.width).coerceIn(0, surface.width)
-        val minY = max(floor(ys.min()).toInt(), activeClip?.top ?: 0).coerceIn(0, surface.height)
-        val maxY = min(ceil(ys.max()).toInt(), activeClip?.bottom ?: surface.height).coerceIn(0, surface.height)
-        if (minX >= maxX || minY >= maxY) return
 
         val dstW = dst.width()
         val dstH = dst.height()
@@ -1370,6 +1340,33 @@ class Arm64CanvasShadow : ShadowLegacyCanvas() {
             }
         }
         surface.syncRect(minX, minY, maxX, maxY)
+    }
+
+    private fun computeMappedBounds(
+        surface: RasterSurface,
+        localLeft: Float,
+        localTop: Float,
+        localRight: Float,
+        localBottom: Float
+    ): IntArray? {
+        val xs = floatArrayOf(
+            matrix.mapX(localLeft, localTop),
+            matrix.mapX(localRight, localTop),
+            matrix.mapX(localRight, localBottom),
+            matrix.mapX(localLeft, localBottom)
+        )
+        val ys = floatArrayOf(
+            matrix.mapY(localLeft, localTop),
+            matrix.mapY(localRight, localTop),
+            matrix.mapY(localRight, localBottom),
+            matrix.mapY(localLeft, localBottom)
+        )
+        val activeClip = clip
+        val minX = max(floor(xs.min()).toInt(), activeClip?.left ?: 0).coerceIn(0, surface.width)
+        val maxX = min(ceil(xs.max()).toInt(), activeClip?.right ?: surface.width).coerceIn(0, surface.width)
+        val minY = max(floor(ys.min()).toInt(), activeClip?.top ?: 0).coerceIn(0, surface.height)
+        val maxY = min(ceil(ys.max()).toInt(), activeClip?.bottom ?: surface.height).coerceIn(0, surface.height)
+        return if (minX >= maxX || minY >= maxY) null else intArrayOf(minX, minY, maxX, maxY)
     }
 
     private fun extractBitmapPixels(bitmap: Bitmap): IntArray? {
@@ -1605,10 +1602,12 @@ private class BackingSurface(val width: Int, val height: Int) {
 }
 
 private object SurfaceRegistry {
-    private val surfaces = WeakHashMap<Bitmap, BackingSurface>()
+    private val surfaces = Collections.synchronizedMap(WeakHashMap<Bitmap, BackingSurface>())
 
+    @Synchronized
     fun peek(bitmap: Bitmap): BackingSurface? = surfaces[bitmap]
 
+    @Synchronized
     fun forBitmap(bitmap: Bitmap): BackingSurface {
         val existing = surfaces[bitmap]
         if (existing != null && existing.width == bitmap.width && existing.height == bitmap.height) {
@@ -1879,22 +1878,25 @@ private object BitmapFontMetrics {
     fun charAdvance(ch: Char, textSize: Float): Float =
         if (ch.code in 0x20..0x7E) asciiAdvance(textSize) else cjkAdvance(textSize)
 
-    fun measure(text: CharSequence, start: Int, end: Int, textSize: Float, textScaleX: Float): Float {
-        val s = start.coerceIn(0, text.length)
-        val e = end.coerceIn(s, text.length)
-        var total = 0f
-        for (i in s until e) {
-            total += charAdvance(text[i], textSize)
-        }
-        return total * max(0f, textScaleX)
-    }
+    fun measure(text: CharSequence, start: Int, end: Int, textSize: Float, textScaleX: Float): Float =
+        measureRange(text.length, start, end, textSize, textScaleX, text::get)
 
-    fun measure(text: CharArray, start: Int, end: Int, textSize: Float, textScaleX: Float): Float {
-        val s = start.coerceIn(0, text.size)
-        val e = end.coerceIn(s, text.size)
+    fun measure(text: CharArray, start: Int, end: Int, textSize: Float, textScaleX: Float): Float =
+        measureRange(text.size, start, end, textSize, textScaleX) { text[it] }
+
+    private inline fun measureRange(
+        totalLen: Int,
+        start: Int,
+        end: Int,
+        textSize: Float,
+        textScaleX: Float,
+        charAt: (Int) -> Char
+    ): Float {
+        val s = start.coerceIn(0, totalLen)
+        val e = end.coerceIn(s, totalLen)
         var total = 0f
         for (i in s until e) {
-            total += charAdvance(text[i], textSize)
+            total += charAdvance(charAt(i), textSize)
         }
         return total * max(0f, textScaleX)
     }
@@ -2132,6 +2134,17 @@ private object BitmapGlyphRenderer {
         '}' to g("##...", "..#..", "..#..", "...#.", "..#..", "..#..", "##..."),
         '~' to g(".....", ".#..#", "#.##.", ".....", ".....", ".....", ".....")
     )
+}
+
+/**
+ * Creates a deterministic [MainViewModel] with background polling disabled and performs a single
+ * synchronous initial telemetry/path snapshot load so background IO threads cannot race Compose UI
+ * measurement or invalidate test clocks mid-frame.
+ */
+internal fun createScreenshotViewModel(): MainViewModel {
+    return MainViewModel(autoStartPolling = false).apply {
+        runBlocking { refreshTelemetryAndEnv(includeEnv = true) }
+    }
 }
 
 /**

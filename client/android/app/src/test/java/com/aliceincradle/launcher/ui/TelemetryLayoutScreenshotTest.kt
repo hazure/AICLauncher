@@ -22,7 +22,7 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(AndroidJUnit4::class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
-@Config(shadows = [Arm64BitmapShadow::class, Arm64PaintShadow::class, Arm64CanvasShadow::class])
+@Config(shadows = [Arm64BitmapShadow::class, Arm64PaintShadow::class, Arm64CanvasShadow::class, Arm64AndroidComposeViewShadow::class])
 class TelemetryLayoutScreenshotTest {
 
     @get:Rule
@@ -50,7 +50,7 @@ class TelemetryLayoutScreenshotTest {
         fileName: String,
         simulateRunning: Boolean
     ) {
-        val viewModel = MainViewModel()
+        val viewModel = createScreenshotViewModel()
         if (simulateRunning) {
             viewModel.launchGame()
             viewModel.toggleSampleDownloads()

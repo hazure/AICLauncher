@@ -29,7 +29,7 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(AndroidJUnit4::class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
-@Config(shadows = [Arm64BitmapShadow::class, Arm64PaintShadow::class, Arm64CanvasShadow::class])
+@Config(shadows = [Arm64BitmapShadow::class, Arm64PaintShadow::class, Arm64CanvasShadow::class, Arm64AndroidComposeViewShadow::class])
 class FolderAndSettingsScreenScreenshotTest {
 
     @get:Rule
@@ -38,7 +38,7 @@ class FolderAndSettingsScreenScreenshotTest {
     @Test
     @Config(sdk = [34], qualifiers = "w360dp-h780dp-xhdpi")
     fun folderTabRendersDualPaneSelectionBottomIconsDialogsAndScrollsOn360dp() {
-        val viewModel = MainViewModel()
+        val viewModel = createScreenshotViewModel()
         lateinit var hostView: View
 
         composeTestRule.setContent {
@@ -133,7 +133,7 @@ class FolderAndSettingsScreenScreenshotTest {
     @Test
     @Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
     fun folderTabRendersAndScrollsWithoutOverflowOn412dp() {
-        val viewModel = MainViewModel()
+        val viewModel = createScreenshotViewModel()
         lateinit var hostView: View
 
         composeTestRule.setContent {
@@ -158,7 +158,7 @@ class FolderAndSettingsScreenScreenshotTest {
     @Test
     @Config(sdk = [34], qualifiers = "w360dp-h780dp-xhdpi")
     fun settingsTabRendersPythonCardsWarningAndCustomPathDialogOn360dp() {
-        val viewModel = MainViewModel()
+        val viewModel = createScreenshotViewModel()
         lateinit var hostView: View
 
         composeTestRule.setContent {
@@ -190,7 +190,7 @@ class FolderAndSettingsScreenScreenshotTest {
     @Test
     @Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
     fun settingsTabRendersCleanlyOn412dp() {
-        val viewModel = MainViewModel()
+        val viewModel = createScreenshotViewModel()
         lateinit var hostView: View
 
         composeTestRule.setContent {
