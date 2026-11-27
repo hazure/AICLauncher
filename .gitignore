@@ -16,3 +16,6 @@ __pycache__/
 
 # Acceptance logs
 out/
+
+# Keystores
+*.keystore
