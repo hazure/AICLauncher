@@ -1,6 +1,7 @@
 package com.aliceincradle.launcher.bridge
 
 import android.content.Context
+import android.os.Build
 import com.aliceincradle.launcher.data.GameProcessState
 import com.aliceincradle.launcher.data.GameRunStatus
 import com.aliceincradle.launcher.data.SafeProbeIo
@@ -75,9 +76,8 @@ class EnvDetector(
                 } catch (e: IOException) {
                     SafeProbeIo.debug(TAG, "Closing errorStream failed for $bin: ${e.message}")
                 }
-                val finished = process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                val finished = waitForProcess(process, PROCESS_TIMEOUT_SECONDS)
                 if (!finished) {
-                    process.destroyForcibly()
                     SafeProbeIo.warn(TAG, "Python version probe timed out for $bin")
                     continue
                 }
@@ -242,6 +242,27 @@ class EnvDetector(
             }
         }
         return null
+    }
+
+    private fun waitForProcess(process: Process, timeoutSeconds: Long): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+            }
+            return finished
+        }
+        val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        while (System.nanoTime() < deadlineNanos) {
+            try {
+                process.exitValue()
+                return true
+            } catch (_: IllegalThreadStateException) {
+                Thread.sleep(25L)
+            }
+        }
+        process.destroy()
+        return false
     }
 
     companion object {
