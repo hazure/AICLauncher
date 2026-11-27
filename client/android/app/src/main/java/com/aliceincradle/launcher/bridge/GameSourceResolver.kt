@@ -76,7 +76,8 @@ data class CachedShortCode(
     val shortCode: String,
     val fileName: String,
     val version: String? = null,
-    val updatedAtMs: Long = System.currentTimeMillis()
+    val updatedAtMs: Long = System.currentTimeMillis(),
+    val isManual: Boolean = false
 )
 
 /**
@@ -92,6 +93,7 @@ class ShortCodeCacheStore(private val storageFile: File) {
                 setProperty("fileName", entry.fileName)
                 entry.version?.let { setProperty("version", it) }
                 setProperty("updatedAtMs", entry.updatedAtMs.toString())
+                setProperty("isManual", entry.isManual.toString())
             }
             val tmp = File(storageFile.parentFile, "${storageFile.name}.tmp")
             FileOutputStream(tmp).use { out ->
@@ -121,7 +123,8 @@ class ShortCodeCacheStore(private val storageFile: File) {
                 shortCode = code,
                 fileName = name,
                 version = props.getProperty("version")?.takeIf { it.isNotBlank() },
-                updatedAtMs = props.getProperty("updatedAtMs")?.toLongOrNull() ?: 0L
+                updatedAtMs = props.getProperty("updatedAtMs")?.toLongOrNull() ?: 0L,
+                isManual = props.getProperty("isManual")?.toBooleanStrictOrNull() ?: false
             )
         } catch (e: Exception) {
             SafeProbeIo.warn("AICL_PIPELINE", "Failed loading shortCode cache: ${e.message}", e)

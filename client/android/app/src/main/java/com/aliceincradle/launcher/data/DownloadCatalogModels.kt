@@ -53,7 +53,8 @@ data class DownloadPageState(
     val items: List<DownloadCatalogItem> = emptyList(),
     val selectedDetailItem: DownloadCatalogItem? = null,
     val isLoadingCatalog: Boolean = false,
-    val catalogError: String? = null
+    val catalogError: String? = null,
+    val pendingCaptureItemId: String? = null
 ) {
     val activeDownloadCount: Int
         get() = allItems.count {

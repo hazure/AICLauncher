@@ -273,7 +273,13 @@ data class SettingsPageState(
     val reservedButtonLabel: String = "Python 设置",
     val reservedHintText: String = "此处不再多举例！",
     val cacheSizeText: String = "计算中...",
-    val statusNotice: String? = null
+    val statusNotice: String? = null,
+    val cachedShortCodeSummary: String = "未配置短码",
+    val isManualShortCodeDialogOpen: Boolean = false,
+    val manualShortCodeDraft: String = "",
+    val manualFileNameDraft: String = "AliceInCradle Win ver030i.7z",
+    val manualVersionDraft: String = "0.30i",
+    val manualShortCodeError: String? = null
 )
 
 fun formatFileSize(bytes: Long): String {

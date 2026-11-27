@@ -3,12 +3,15 @@ package com.aliceincradle.launcher.ui
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import com.aliceincradle.launcher.bridge.ArchiveExtractor
+import com.aliceincradle.launcher.bridge.DownloadCoordinator
 import com.aliceincradle.launcher.bridge.EnvDetector
 import com.aliceincradle.launcher.bridge.EnvironmentStatus
 import com.aliceincradle.launcher.bridge.GameSourceResolver
 import com.aliceincradle.launcher.bridge.InjectionBridge
 import com.aliceincradle.launcher.bridge.InjectionPhase
 import com.aliceincradle.launcher.bridge.InjectionUiState
+import com.aliceincradle.launcher.bridge.ResolveOutcome
+import com.aliceincradle.launcher.bridge.ShortCodeCacheStore
 import com.aliceincradle.launcher.data.DefaultPathProvider
 import com.aliceincradle.launcher.data.DeviceInfo
 import com.aliceincradle.launcher.data.DeviceInfoProvider
@@ -102,7 +105,11 @@ class MainViewModel @JvmOverloads constructor(
     private val maintenanceManager: MaintenanceManager = MaintenanceManager(),
     downloadQueueManagerOverride: DownloadQueueManager? = null,
     autoFetchCatalog: Boolean = true,
-    private val injectionBridge: InjectionBridge = InjectionBridge()
+    private val injectionBridge: InjectionBridge = InjectionBridge(),
+    private val gameSourceResolverOverride: GameSourceResolver? = null,
+    private val shortCodeStoreOverride: ShortCodeCacheStore? = null,
+    private val downloadCoordinatorOverride: DownloadCoordinator? = null,
+    private val useWebViewPrimaryOverride: Boolean? = null
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -350,16 +357,12 @@ class MainViewModel @JvmOverloads constructor(
         val target = _uiState.value.downloadPage.allItems.find { it.id == itemId } ?: return
         if (target.status == DownloadContentStatus.DISABLED ||
             target.status == DownloadContentStatus.QUEUED ||
-            target.status == DownloadContentStatus.DOWNLOADING ||
-            target.downloadUrl.isBlank()
+            target.status == DownloadContentStatus.DOWNLOADING
         ) {
             return
         }
 
         val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
-        val fileName = target.fileName.ifBlank { "${target.id}.zip" }
-        val destFile = File(downloadDir, fileName)
-
         updateCatalogItem(itemId) {
             it.copy(
                 status = DownloadContentStatus.QUEUED,
@@ -368,14 +371,78 @@ class MainViewModel @JvmOverloads constructor(
                 errorMessage = null
             )
         }
-        downloadQueueManager.enqueue(
-            DownloadRequest(
-                itemId = itemId,
-                url = target.downloadUrl,
-                destFile = destFile,
-                expectedBytes = target.sizeBytes
-            )
-        )
+
+        probeScope.launch {
+            val coordinator = getDownloadCoordinator()
+            when (val outcome = coordinator.start()) {
+                is ResolveOutcome.NeedCapture -> {
+                    updateCatalogItem(itemId) {
+                        it.copy(status = DownloadContentStatus.AVAILABLE, errorMessage = null)
+                    }
+                    _uiState.update { state ->
+                        state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = itemId))
+                    }
+                }
+                is ResolveOutcome.Failed -> {
+                    updateCatalogItem(itemId) {
+                        it.copy(
+                            status = DownloadContentStatus.FAILED,
+                            errorMessage = outcome.message
+                        )
+                    }
+                }
+                is ResolveOutcome.Ready -> {
+                    val fileName = outcome.source.fileName.ifBlank {
+                        target.fileName.ifBlank { "${target.id}.7z" }
+                    }
+                    val destFile = File(downloadDir, fileName)
+                    downloadQueueManager.enqueue(
+                        DownloadRequest(
+                            itemId = itemId,
+                            url = outcome.source.url,
+                            destFile = destFile,
+                            expectedBytes = outcome.source.sizeBytes ?: target.sizeBytes,
+                            expectedSha256 = outcome.source.sha256,
+                            sourceChannel = com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK,
+                            reResolveUrl = {
+                                (coordinator.start(oldFp = outcome.fp) as? ResolveOutcome.Ready)?.source?.url
+                            }
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun onShortCodeCaptured(shortCode: String, fileName: String) {
+        val pendingItemId = _uiState.value.downloadPage.pendingCaptureItemId
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = null))
+        }
+        getDownloadCoordinator().saveShortCode(shortCode, fileName, version = null, isManual = false)
+        refreshCachedShortCodeSummary()
+        if (!pendingItemId.isNullOrBlank()) {
+            triggerCatalogDownload(pendingItemId)
+        }
+    }
+
+    fun onShortCodeCaptureCancelled(openManualDialog: Boolean = false) {
+        val pendingItemId = _uiState.value.downloadPage.pendingCaptureItemId
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = null))
+        }
+        if (!pendingItemId.isNullOrBlank()) {
+            updateCatalogItem(pendingItemId) {
+                it.copy(
+                    status = DownloadContentStatus.FAILED,
+                    errorMessage = "SHORTCODE_MISSING: 未捕获到短码"
+                )
+            }
+        }
+        if (openManualDialog) {
+            selectTab(MainTab.SETTINGS)
+            openManualShortCodeDialog()
+        }
     }
 
     fun cancelCatalogDownload(itemId: String) {
@@ -2043,22 +2110,107 @@ class MainViewModel @JvmOverloads constructor(
     private val _acquisitionState = MutableStateFlow(AcquisitionUiState())
     val acquisitionState: StateFlow<AcquisitionUiState> = _acquisitionState.asStateFlow()
 
-    private val gameSourceResolver = GameSourceResolver()
+    private val gameSourceResolver: GameSourceResolver = gameSourceResolverOverride ?: GameSourceResolver()
     private val archiveExtractor = ArchiveExtractor()
 
-    fun saveManualShortCode(shortCode: String, fileName: String) {
-        val ctx = appContext ?: return
+    private fun getShortCodeStore(): ShortCodeCacheStore {
+        if (shortCodeStoreOverride != null) return shortCodeStoreOverride
+        val baseDir = appContext?.filesDir ?: File("downloads")
+        return ShortCodeCacheStore(File(baseDir, "aicl_shortlink_cache.properties"))
+    }
+
+    internal fun getDownloadCoordinator(): DownloadCoordinator {
+        return downloadCoordinatorOverride ?: DownloadCoordinator(
+            resolver = gameSourceResolver,
+            shortCodeStore = getShortCodeStore()
+        )
+    }
+
+    fun refreshCachedShortCodeSummary() {
+        val cached = getDownloadCoordinator().loadCachedShortCode()
+        val summary = if (cached == null) {
+            "未配置短码"
+        } else {
+            val mode = if (cached.isManual) "手动" else "捕获"
+            "$mode: ${cached.shortCode}"
+        }
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(cachedShortCodeSummary = summary))
+        }
+    }
+
+    fun openManualShortCodeDialog() {
+        val cached = getDownloadCoordinator().loadCachedShortCode()
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    isManualShortCodeDialogOpen = true,
+                    manualShortCodeDraft = cached?.shortCode ?: state.settingsPage.manualShortCodeDraft,
+                    manualFileNameDraft = cached?.fileName ?: state.settingsPage.manualFileNameDraft,
+                    manualVersionDraft = cached?.version ?: state.settingsPage.manualVersionDraft,
+                    manualShortCodeError = null
+                )
+            )
+        }
+    }
+
+    fun updateManualShortCodeDraft(shortCode: String) {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(manualShortCodeDraft = shortCode, manualShortCodeError = null))
+        }
+    }
+
+    fun updateManualFileNameDraft(fileName: String) {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(manualFileNameDraft = fileName, manualShortCodeError = null))
+        }
+    }
+
+    fun updateManualVersionDraft(version: String) {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(manualVersionDraft = version))
+        }
+    }
+
+    fun confirmManualShortCode() {
+        val settings = _uiState.value.settingsPage
+        val code = settings.manualShortCodeDraft.trim()
+        val name = settings.manualFileNameDraft.trim()
+        if (code.isEmpty() || name.isEmpty()) {
+            _uiState.update { state ->
+                state.copy(settingsPage = state.settingsPage.copy(manualShortCodeError = "短码与文件名不能为空"))
+            }
+            return
+        }
+        saveManualShortCode(code, name, settings.manualVersionDraft.trim().takeIf { it.isNotEmpty() })
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    isManualShortCodeDialogOpen = false,
+                    manualShortCodeError = null,
+                    statusNotice = "已保存手动短码：$code"
+                )
+            )
+        }
+    }
+
+    fun dismissManualShortCodeDialog() {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(isManualShortCodeDialogOpen = false, manualShortCodeError = null))
+        }
+    }
+
+    fun saveManualShortCode(shortCode: String, fileName: String, version: String? = null) {
         val code = shortCode.trim()
         val name = fileName.trim()
         if (code.isEmpty() || name.isEmpty()) return
-        val store = com.aliceincradle.launcher.bridge.ShortCodeCacheStore(File(ctx.filesDir, "aicl_shortlink_cache.properties"))
-        store.save(
-            com.aliceincradle.launcher.bridge.CachedShortCode(
-                shortCode = code,
-                fileName = name,
-                version = null
-            )
+        getDownloadCoordinator().saveShortCode(
+            shortCode = code,
+            fileName = name,
+            version = version,
+            isManual = true
         )
+        refreshCachedShortCodeSummary()
     }
 
     fun startOfficialTrialAcquisition() {

@@ -309,6 +309,12 @@ fun MainScreen(viewModel: MainViewModel) {
                 onLogLevelSelect = { viewModel.selectLogLevel(it) },
                 onForceSoftwareRenderingChange = { viewModel.toggleForceSoftwareRendering(it) },
                 onReservedSectionClick = { viewModel.triggerReservedPythonAction() },
+                onOpenManualShortCodeDialog = { viewModel.openManualShortCodeDialog() },
+                onManualShortCodeDraftChange = { viewModel.updateManualShortCodeDraft(it) },
+                onManualFileNameDraftChange = { viewModel.updateManualFileNameDraft(it) },
+                onManualVersionDraftChange = { viewModel.updateManualVersionDraft(it) },
+                onConfirmManualShortCode = { viewModel.confirmManualShortCode() },
+                onDismissManualShortCodeDialog = { viewModel.dismissManualShortCodeDialog() },
                 modifier = contentModifier
             )
         }
@@ -344,6 +350,14 @@ fun MainScreen(viewModel: MainViewModel) {
                 viewModel.setInjectionGameDir(picked)
             },
             onDismiss = { showGameDirPicker = false }
+        )
+    }
+
+    if (uiState.downloadPage.pendingCaptureItemId != null) {
+        ShortCodeCaptureDialog(
+            onCaptured = { code, fileName -> viewModel.onShortCodeCaptured(code, fileName) },
+            onFallbackManual = { viewModel.onShortCodeCaptureCancelled(openManualDialog = true) },
+            onDismiss = { viewModel.onShortCodeCaptureCancelled(openManualDialog = false) }
         )
     }
 }

@@ -218,6 +218,12 @@ fun SettingsScreen(
     onLogLevelSelect: (String) -> Unit,
     onForceSoftwareRenderingChange: (Boolean) -> Unit,
     onReservedSectionClick: () -> Unit,
+    onOpenManualShortCodeDialog: () -> Unit = {},
+    onManualShortCodeDraftChange: (String) -> Unit = {},
+    onManualFileNameDraftChange: (String) -> Unit = {},
+    onManualVersionDraftChange: (String) -> Unit = {},
+    onConfirmManualShortCode: () -> Unit = {},
+    onDismissManualShortCodeDialog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -476,6 +482,19 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(text = state.reservedButtonLabel)
+                }
+
+                OutlinedButton(
+                    onClick = onOpenManualShortCodeDialog,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_manual_shortcode_button")
+                ) {
+                    Text(
+                        text = "官方取链短码（${state.cachedShortCodeSummary}）",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
@@ -754,6 +773,70 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = onDismissLicensesDialog) {
                     Text(text = "关闭")
+                }
+            }
+        )
+    }
+
+    if (state.isManualShortCodeDialogOpen) {
+        AlertDialog(
+            onDismissRequest = onDismissManualShortCodeDialog,
+            title = { Text(text = "手动填入官方短码") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "用于验证 302 刷签名链路或 WebView 捕获失败时兜底",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = state.manualShortCodeDraft,
+                        onValueChange = onManualShortCodeDraftChange,
+                        label = { Text("短码 (shortCode)") },
+                        placeholder = { Text("例如：Oz4hM") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_shortcode_input")
+                    )
+                    OutlinedTextField(
+                        value = state.manualFileNameDraft,
+                        onValueChange = onManualFileNameDraftChange,
+                        label = { Text("文件名 (fileName)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_filename_input")
+                    )
+                    OutlinedTextField(
+                        value = state.manualVersionDraft,
+                        onValueChange = onManualVersionDraftChange,
+                        label = { Text("版本 (可选)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_version_input")
+                    )
+                    if (!state.manualShortCodeError.isNullOrBlank()) {
+                        Text(
+                            text = state.manualShortCodeError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = onConfirmManualShortCode,
+                    modifier = Modifier.testTag("settings_shortcode_confirm")
+                ) {
+                    Text(text = "保存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissManualShortCodeDialog) {
+                    Text(text = "取消")
                 }
             }
         )
