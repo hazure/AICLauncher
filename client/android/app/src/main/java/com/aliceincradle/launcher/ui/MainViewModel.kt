@@ -3,6 +3,10 @@ package com.aliceincradle.launcher.ui
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import com.aliceincradle.launcher.bridge.EnvDetector
+import com.aliceincradle.launcher.bridge.EnvironmentStatus
+import com.aliceincradle.launcher.bridge.InjectionBridge
+import com.aliceincradle.launcher.bridge.InjectionPhase
+import com.aliceincradle.launcher.bridge.InjectionUiState
 import com.aliceincradle.launcher.data.DefaultPathProvider
 import com.aliceincradle.launcher.data.DeviceInfo
 import com.aliceincradle.launcher.data.DeviceInfoProvider
@@ -72,7 +76,8 @@ data class MainUiState(
     val selectedTab: MainTab = MainTab.HOME,
     val downloadPage: DownloadPageState = DownloadPageState(),
     val folderPage: FolderPageState = FolderPageState(),
-    val settingsPage: SettingsPageState = SettingsPageState()
+    val settingsPage: SettingsPageState = SettingsPageState(),
+    val injectionState: InjectionUiState = InjectionUiState()
 )
 
 class MainViewModel @JvmOverloads constructor(
@@ -87,7 +92,8 @@ class MainViewModel @JvmOverloads constructor(
     private val catalogFetcher: RemoteCatalogFetcher = RemoteCatalogFetcher(),
     private val maintenanceManager: MaintenanceManager = MaintenanceManager(),
     downloadQueueManagerOverride: DownloadQueueManager? = null,
-    autoFetchCatalog: Boolean = true
+    autoFetchCatalog: Boolean = true,
+    private val injectionBridge: InjectionBridge = InjectionBridge()
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -198,6 +204,7 @@ class MainViewModel @JvmOverloads constructor(
             refreshTelemetryAndEnv(includeEnv = true)
             refreshFilePanesSync()
             refreshCacheSizeSync()
+            refreshInjectionStateSync()
         }
     }
 
@@ -1460,6 +1467,202 @@ class MainViewModel @JvmOverloads constructor(
                     items = filtered
                 )
             )
+        }
+    }
+
+    // ==================== BepInEx Injection State Machine ====================
+
+    @Volatile
+    private var selectedInjectionGameDir: File? = null
+
+    fun refreshInjectionState() {
+        probeScope.launch {
+            refreshInjectionStateSync()
+        }
+    }
+
+    private fun refreshInjectionStateSync() {
+        val ctx = appContext ?: return
+        val checkpoint = injectionBridge.detectPendingCheckpoint(ctx.cacheDir)
+        val (status, gameRoot, framework) = injectionBridge.evaluateEnvironment(
+            context = ctx,
+            filesDir = ctx.filesDir,
+            userGameDir = selectedInjectionGameDir
+        )
+        val phase = when (status) {
+            EnvironmentStatus.ALREADY_INJECTED -> InjectionPhase.READY
+            EnvironmentStatus.READY -> InjectionPhase.FRAMEWORK_READY
+            else -> InjectionPhase.IDLE
+        }
+        _uiState.update { state ->
+            state.copy(
+                injectionState = state.injectionState.copy(
+                    envStatus = status,
+                    phase = phase,
+                    gameRoot = gameRoot,
+                    frameworkSource = framework,
+                    pendingCheckpoint = checkpoint
+                )
+            )
+        }
+    }
+
+    fun setInjectionGameDirFromSaf(treeUriString: String) {
+        val resolved = fileRepository.resolveSafTreeToDirectory(treeUriString)
+        if (resolved == null) {
+            _uiState.update { state ->
+                state.copy(
+                    injectionState = state.injectionState.copy(
+                        statusMessage = "所选 SAF 目录暂不支持直接访问，请授予全部文件访问权限或选择内部存储目录"
+                    )
+                )
+            }
+            return
+        }
+        selectedInjectionGameDir = resolved
+        refreshInjectionState()
+    }
+
+    fun requestInjection() {
+        val ctx = appContext ?: return
+        val current = _uiState.value.injectionState
+        when (current.envStatus) {
+            EnvironmentStatus.GAME_NOT_FOUND -> {
+                _uiState.update {
+                    it.copy(injectionState = current.copy(statusMessage = "未检测到 Unity 游戏本体（.exe 与同名 _Data/），请先选择游戏根目录"))
+                }
+                return
+            }
+            EnvironmentStatus.FRAMEWORK_MISSING -> {
+                _uiState.update {
+                    it.copy(injectionState = current.copy(statusMessage = "未检测到本地 BepInEx 框架包，请将 BepInEx*.zip 放置于 Downloads 或 frameworks 目录"))
+                }
+                return
+            }
+            EnvironmentStatus.PERMISSION_DENIED -> {
+                _uiState.update {
+                    it.copy(injectionState = current.copy(statusMessage = "目标游戏目录无写入权限，请检查存储权限"))
+                }
+                return
+            }
+            EnvironmentStatus.ALREADY_INJECTED -> {
+                _uiState.update {
+                    it.copy(injectionState = current.copy(statusMessage = "当前游戏目录已完成 BepInEx 注入，无需重复操作"))
+                }
+                return
+            }
+            EnvironmentStatus.READY -> Unit
+        }
+
+        val gameRoot = current.gameRoot ?: return
+        val framework = current.frameworkSource ?: return
+        probeScope.launch {
+            val plugins = injectionBridge.resolvePlugins(ctx)
+            val planResult = injectionBridge.prepareInjectionPlan(gameRoot, framework, plugins)
+            planResult.onSuccess { plan ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            phase = InjectionPhase.AWAITING_CONFIRMATION,
+                            pendingPlan = plan
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            phase = InjectionPhase.FAILED,
+                            statusMessage = err.message ?: "生成注入清单失败"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelInjectionPlan() {
+        _uiState.update { state ->
+            state.copy(
+                injectionState = state.injectionState.copy(
+                    phase = InjectionPhase.CANCELLED,
+                    pendingPlan = null,
+                    statusMessage = "已取消注入，未写入任何文件"
+                )
+            )
+        }
+    }
+
+    fun confirmInjection() {
+        val ctx = appContext ?: return
+        val plan = _uiState.value.injectionState.pendingPlan ?: return
+        _uiState.update { state ->
+            state.copy(
+                injectionState = state.injectionState.copy(
+                    phase = InjectionPhase.INJECTING,
+                    pendingPlan = null,
+                    isBusy = true
+                )
+            )
+        }
+        probeScope.launch {
+            val res = injectionBridge.executeInjection(plan, ctx.filesDir, ctx.cacheDir)
+            res.onSuccess { report ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            envStatus = EnvironmentStatus.ALREADY_INJECTED,
+                            phase = InjectionPhase.READY,
+                            lastReport = report,
+                            isBusy = false,
+                            statusMessage = "BepInEx 注入并校验成功（耗时 ${report.durationMs}ms）"
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            phase = InjectionPhase.FAILED,
+                            isBusy = false,
+                            statusMessage = err.message ?: "注入失败，已回滚"
+                        )
+                    )
+                }
+                refreshInjectionStateSync()
+            }
+        }
+    }
+
+    fun recoverInjectionCheckpoint() {
+        val ctx = appContext ?: return
+        probeScope.launch {
+            val res = injectionBridge.recoverCheckpoint(ctx.cacheDir)
+            res.onSuccess { removed ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            pendingCheckpoint = null,
+                            statusMessage = "已清理 $removed 个半成品文件，可重新执行注入"
+                        )
+                    )
+                }
+                refreshInjectionStateSync()
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            statusMessage = "恢复清理失败：${err.message}"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissInjectionSnackbar() {
+        _uiState.update { state ->
+            state.copy(injectionState = state.injectionState.copy(statusMessage = null))
         }
     }
 }

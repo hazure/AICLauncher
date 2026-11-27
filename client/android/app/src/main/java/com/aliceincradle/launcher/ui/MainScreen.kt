@@ -3,6 +3,8 @@ package com.aliceincradle.launcher.ui
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import com.aliceincradle.launcher.data.DownloadQueueManager
 import java.io.File
@@ -32,10 +34,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -51,8 +57,25 @@ import com.aliceincradle.launcher.data.SystemTelemetry
 fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val gameDirPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.setInjectionGameDirFromSaf(uri.toString())
+        }
+    }
+
+    LaunchedEffect(uiState.injectionState.statusMessage) {
+        val msg = uiState.injectionState.statusMessage
+        if (!msg.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(msg)
+            viewModel.dismissInjectionSnackbar()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         floatingActionButton = {
             if (uiState.selectedTab != MainTab.FILES) {
                 val activeDownloads = uiState.downloadPage.activeDownloadCount
@@ -117,7 +140,11 @@ fun MainScreen(viewModel: MainViewModel) {
             MainTab.HOME -> HomeTabContent(
                 deviceInfo = uiState.deviceInfo,
                 telemetry = uiState.telemetry,
+                injectionState = uiState.injectionState,
                 onGaugeClick = { viewModel.openTelemetryDialog(it) },
+                onPickGameDir = { gameDirPicker.launch(null) },
+                onRefreshProbe = { viewModel.refreshInjectionState() },
+                onRequestInject = { viewModel.requestInjection() },
                 modifier = contentModifier
             )
 
@@ -246,13 +273,32 @@ fun MainScreen(viewModel: MainViewModel) {
         telemetry = uiState.telemetry,
         onDismiss = { viewModel.dismissTelemetryDialog() }
     )
+
+    uiState.injectionState.pendingPlan?.let { plan ->
+        InjectConfirmDialog(
+            plan = plan,
+            onConfirm = { viewModel.confirmInjection() },
+            onCancel = { viewModel.cancelInjectionPlan() }
+        )
+    }
+
+    uiState.injectionState.pendingCheckpoint?.let { checkpoint ->
+        CheckpointRecoveryDialog(
+            checkpoint = checkpoint,
+            onRecover = { viewModel.recoverInjectionCheckpoint() }
+        )
+    }
 }
 
 @Composable
 private fun HomeTabContent(
     deviceInfo: DeviceInfo,
     telemetry: SystemTelemetry,
+    injectionState: com.aliceincradle.launcher.bridge.InjectionUiState,
     onGaugeClick: (TelemetryDialogType) -> Unit,
+    onPickGameDir: () -> Unit,
+    onRefreshProbe: () -> Unit,
+    onRequestInject: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -264,6 +310,13 @@ private fun HomeTabContent(
         TelemetryDashboardCard(
             telemetry = telemetry,
             onGaugeClick = onGaugeClick
+        )
+
+        InjectionStatusCard(
+            state = injectionState,
+            onPickGameDir = onPickGameDir,
+            onRefreshProbe = onRefreshProbe,
+            onRequestInject = onRequestInject
         )
 
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
