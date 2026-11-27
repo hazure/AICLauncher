@@ -144,7 +144,8 @@ class GameSourceResolver(
     private val shortLinkRedirectFetcher: ShortLinkRedirectFetcher = ShortLinkRedirectFetcher { shortUrl ->
         fetchShortLinkRedirect(shortUrl)
     },
-    private val clockMs: () -> Long = { System.currentTimeMillis() }
+    private val clockMs: () -> Long = { System.currentTimeMillis() },
+    private val pipelineLogger: (String) -> Unit = { msg -> runCatching { Log.i(TAG, msg) } }
 ) {
     @Volatile
     private var metadataCache: CachedMetadata? = null
@@ -158,19 +159,27 @@ class GameSourceResolver(
         return cached.version to cached.sizeBytes
     }
 
-    suspend fun resolveLatestWinTrial(context: Context? = null): GameSource? {
+    suspend fun resolveLatestWinTrial(
+        context: Context? = null,
+        cacheHit: Boolean = false,
+        oldFp: String? = null
+    ): GameSource? {
         val startMs = clockMs()
-        logPipeline("RESOLVING_SOURCE start")
+        pipelineLogger("AICL_PIPELINE phase=RESOLVE_ENTER sourceKind=? cacheHit=$cacheHit")
 
         val direct = try {
             directFetcher()
         } catch (e: Exception) {
             SafeProbeIo.warn(TAG, "Direct source resolution failed: ${e.message}", e)
+            pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=EXCEPTION sourceKind=direct_api reason=${e.message}")
             null
         }
         if (direct != null && direct.url.isNotBlank()) {
             cacheMetadata(direct)
-            logPipeline("RESOLVING_SOURCE ok kind=${direct.sourceKind} fp=${urlFingerprint(direct.url)} elapsedMs=${clockMs() - startMs}")
+            pipelineLogger(
+                "AICL_PIPELINE phase=RESOLVE_EXIT status=OK sourceKind=${direct.sourceKind.name.lowercase()} " +
+                    "oldFp=${oldFp ?: "none"} newFp=${urlFingerprint(direct.url)} signedUrlFpOnly=true elapsedMs=${clockMs() - startMs}"
+            )
             return direct
         }
 
@@ -179,16 +188,20 @@ class GameSourceResolver(
                 webViewFetcher(context)
             } catch (e: Exception) {
                 SafeProbeIo.warn(TAG, "WebView fallback resolution failed: ${e.message}", e)
+                pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=EXCEPTION sourceKind=webview_fallback reason=${e.message}")
                 null
             }
             if (webViewResult != null && webViewResult.url.isNotBlank()) {
                 cacheMetadata(webViewResult)
-                logPipeline("RESOLVING_SOURCE ok kind=${webViewResult.sourceKind} fp=${urlFingerprint(webViewResult.url)} elapsedMs=${clockMs() - startMs}")
+                pipelineLogger(
+                    "AICL_PIPELINE phase=RESOLVE_EXIT status=OK sourceKind=${webViewResult.sourceKind.name.lowercase()} " +
+                        "oldFp=${oldFp ?: "none"} newFp=${urlFingerprint(webViewResult.url)} signedUrlFpOnly=true elapsedMs=${clockMs() - startMs}"
+                )
                 return webViewResult
             }
         }
 
-        logPipeline("RESOLVING_SOURCE failed reason=SOURCE_UNAVAILABLE elapsedMs=${clockMs() - startMs}")
+        pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=SHORTCODE_MISSING sourceKind=none elapsedMs=${clockMs() - startMs}")
         return null
     }
 
@@ -204,14 +217,22 @@ class GameSourceResolver(
         shortCode: String,
         fileName: String,
         version: String? = null,
-        sourceKind: SourceKind = SourceKind.SHORTCODE_REFRESH
+        sourceKind: SourceKind = SourceKind.SHORTCODE_REFRESH,
+        oldFp: String? = null
     ): Result<GameSource> {
         val startMs = clockMs()
+        pipelineLogger(
+            "AICL_PIPELINE phase=RESOLVE_ENTER sourceKind=${sourceKind.name.lowercase()} " +
+                "cacheHit=${sourceKind == SourceKind.SHORTCODE_REFRESH}"
+        )
         val shortUrl = buildShortLinkUrl(shortCode, fileName)
         val locRes = shortLinkRedirectFetcher.fetchRedirectLocation(shortUrl)
         return locRes.map { signedUrl ->
             val fp = urlFingerprint(signedUrl)
-            logPipeline("RESOLVING_LINK ok sourceKind=$sourceKind fp=$fp elapsedMs=${clockMs() - startMs}")
+            pipelineLogger(
+                "AICL_PIPELINE phase=RESOLVE_EXIT status=OK sourceKind=${sourceKind.name.lowercase()} " +
+                    "oldFp=${oldFp ?: "none"} newFp=$fp http=302 signedUrlFpOnly=true elapsedMs=${clockMs() - startMs}"
+            )
             GameSource(
                 url = signedUrl,
                 version = version,
@@ -220,7 +241,10 @@ class GameSourceResolver(
                 shortCode = shortCode
             )
         }.onFailure { err ->
-            logPipeline("RESOLVING_LINK failed sourceKind=$sourceKind reason=${err.message} elapsedMs=${clockMs() - startMs}")
+            pipelineLogger(
+                "AICL_PIPELINE phase=RESOLVE_EXIT status=EXCEPTION sourceKind=${sourceKind.name.lowercase()} " +
+                    "reason=${err.message} elapsedMs=${clockMs() - startMs}"
+            )
         }
     }
 

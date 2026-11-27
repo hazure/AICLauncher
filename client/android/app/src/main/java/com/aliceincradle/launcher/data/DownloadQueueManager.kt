@@ -156,12 +156,19 @@ open class RemoteCatalogFetcher(
     }
 }
 
+enum class DownloadSourceChannel {
+    WEBVIEW_MAIN,
+    HTTP_FALLBACK,
+    CATALOG_FALLBACK
+}
+
 data class DownloadRequest(
     val itemId: String,
     val url: String,
     val destFile: File,
     val expectedBytes: Long = 0L,
     val expectedSha256: String? = null,
+    val sourceChannel: DownloadSourceChannel = DownloadSourceChannel.HTTP_FALLBACK,
     val reResolveUrl: (suspend () -> String?)? = null
 )
 
@@ -201,6 +208,12 @@ class DownloadQueueManager(
                     val partFile = File(request.destFile.parentFile, "${request.destFile.name}.part")
                     activePartFiles[request.itemId] = partFile
                     try {
+                        runCatching {
+                            Log.i(
+                                "AICL_PIPELINE",
+                                "phase=DOWNLOAD_START itemId=${request.itemId} sourceKind=${request.sourceChannel.name} fp=${GameSourceResolver.urlFingerprint(request.url)}"
+                            )
+                        }
                         listener?.onStarted(request.itemId)
                         streamDownloader(request, requireNotNull(listener))
                     } catch (e: CancellationException) {
