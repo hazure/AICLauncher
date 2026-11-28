@@ -1,5 +1,8 @@
 package com.aliceincradle.launcher.ui
 
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,6 +39,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -227,6 +231,23 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val appVersionName = remember(context) {
+        try {
+            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            pkgInfo.versionName?.takeIf { it.isNotBlank() } ?: "unknown"
+        } catch (e: Exception) {
+            Log.e("SettingsTab", "Failed to read package versionName", e)
+            "unknown"
+        }
+    }
     val mountDirLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -483,19 +504,6 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(text = state.reservedButtonLabel)
                 }
-
-                OutlinedButton(
-                    onClick = onOpenManualShortCodeDialog,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("settings_manual_shortcode_button")
-                ) {
-                    Text(
-                        text = "官方取链短码（${state.cachedShortCodeSummary}）",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             }
         }
 
@@ -578,7 +586,7 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = "v${state.versionName}",
+                        text = "v$appVersionName",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary
                     )

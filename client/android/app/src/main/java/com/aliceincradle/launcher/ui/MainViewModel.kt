@@ -1604,8 +1604,7 @@ class MainViewModel @JvmOverloads constructor(
                     pythonDirOptions = nextDirOptions,
                     logLevel = data.logLevel,
                     isDevModeUnlocked = data.isDevModeUnlocked,
-                    forceSoftwareRendering = data.forceSoftwareRendering,
-                    versionName = data.versionName
+                    forceSoftwareRendering = data.forceSoftwareRendering
                 )
             )
         }
@@ -1632,8 +1631,7 @@ class MainViewModel @JvmOverloads constructor(
                     selectedPythonDir = nextPage.selectedPythonDir,
                     logLevel = nextPage.logLevel,
                     isDevModeUnlocked = nextPage.isDevModeUnlocked,
-                    forceSoftwareRendering = nextPage.forceSoftwareRendering,
-                    versionName = nextPage.versionName
+                    forceSoftwareRendering = nextPage.forceSoftwareRendering
                 )
             }
             state.copy(settingsPage = nextPage)
