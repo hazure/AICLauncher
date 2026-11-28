@@ -28,9 +28,44 @@ jobs:
 
       - name: Run unit tests and assembleDebug
         run: |
+          INIT_SCRIPT="${RUNNER_TEMP:-/tmp}/maven-mirror.init.gradle"
+          cat <<'EOF' > "$INIT_SCRIPT"
+          beforeSettings { settings ->
+              settings.pluginManagement {
+                  repositories {
+                      maven {
+                          name = "GoogleMavenCentralMirror"
+                          url = uri("https://maven-central.storage-download.googleapis.com/maven2/")
+                      }
+                  }
+              }
+              settings.dependencyResolutionManagement {
+                  repositories {
+                      maven {
+                          name = "GoogleMavenCentralMirror"
+                          url = uri("https://maven-central.storage-download.googleapis.com/maven2/")
+                      }
+                  }
+              }
+          }
+          EOF
           chmod +x client/android/gradlew
+          set -o pipefail
           cd client/android
-          ./gradlew testDebugUnitTest assembleDebug --stacktrace
+          attempt=0
+          max_retries=2
+          while true; do
+            if ./gradlew --init-script "$INIT_SCRIPT" testDebugUnitTest assembleDebug --stacktrace 2>&1 | tee ../../build_output.log; then
+              break
+            fi
+            if [ "$attempt" -lt "$max_retries" ] && grep -qE "429|Too Many Requests|Connection reset|Read timed out|Connect timed out|UnknownHostException|Could not GET|Could not HEAD|SocketTimeoutException|502|503|504" ../../build_output.log; then
+              attempt=$((attempt + 1))
+              echo "Transient network/429 error detected. Retrying ($attempt/$max_retries) in 10s..."
+              sleep 10
+            else
+              exit 1
+            fi
+          done
 
       - name: Upload Debug APK artifact
         if: success()
