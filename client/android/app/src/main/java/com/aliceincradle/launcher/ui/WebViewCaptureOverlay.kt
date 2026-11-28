@@ -66,8 +66,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private const val CAPTURE_CHROME_UA =
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+internal const val DESKTOP_CHROME_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+internal const val DEFAULT_ZOOM_PERCENT = 80
+internal const val RESET_ZOOM_PERCENT = 100
+internal const val MIN_ZOOM_PERCENT = 50
+internal const val MAX_ZOOM_PERCENT = 150
+internal const val ZOOM_STEP_PERCENT = 10
 
 private const val MIN_RECOMMENDED_WEBVIEW_MAJOR = 115
 private const val PAGE_LOAD_TIMEOUT_MS = 15_000L
@@ -75,6 +81,23 @@ private const val DOM_POLL_INTERVAL_MS = 500L
 private const val DOM_POLL_MAX_ATTEMPTS = 12
 private const val PLAY_STORE_WEBVIEW_MARKET_URI = "market://details?id=com.google.android.webview"
 private const val PLAY_STORE_WEBVIEW_HTTPS_URL = "https://play.google.com/store/apps/details?id=com.google.android.webview"
+
+internal fun clampZoomPercent(percent: Int): Int = percent.coerceIn(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT)
+
+private val VIEWPORT_UNLOCK_JS = """
+    (function() {
+        try {
+            var metas = document.querySelectorAll('meta[name="viewport"]');
+            for (var i = 0; i < metas.length; i++) {
+                metas[i].parentNode.removeChild(metas[i]);
+            }
+            var meta = document.createElement('meta');
+            meta.name = 'viewport';
+            meta.content = 'width=device-width, initial-scale=0.8, minimum-scale=0.5, maximum-scale=3.0, user-scalable=yes';
+            (document.head || document.documentElement).appendChild(meta);
+        } catch (_) {}
+    })();
+""".trimIndent()
 
 private val URL_TOKEN_REGEX = Regex("""https?://\S+""")
 private val SHORTLINK_NO_SCHEME_REGEX = Regex("""vanilla\.shiro\.dev/f/\S+""", RegexOption.IGNORE_CASE)
@@ -95,6 +118,25 @@ private val SMART_CAPTURE_AND_AGREE_JS = """
                 return 'WAIT';
             }
         }
+        try {
+            var allEls = document.querySelectorAll('div, section, aside');
+            var vw = window.innerWidth || 0;
+            var vh = window.innerHeight || 0;
+            for (var k = 0; k < allEls.length; k++) {
+                var ov = allEls[k];
+                if (ov.id === 'preloader') continue;
+                var ocs = window.getComputedStyle ? window.getComputedStyle(ov) : null;
+                if (!ocs || ocs.position !== 'fixed') continue;
+                var z = parseInt(ocs.zIndex || '0', 10);
+                if (isNaN(z) || z <= 10) continue;
+                var rect = ov.getBoundingClientRect ? ov.getBoundingClientRect() : null;
+                if (rect && vw > 0 && vh > 0 && rect.width >= vw * 0.8 && rect.height >= vh * 0.8) {
+                    if (!ov.querySelector('button, a, input, [role="button"]')) {
+                        ov.style.pointerEvents = 'none';
+                    }
+                }
+            }
+        } catch (_) {}
         var excludeRe = /(cancel|取消|leave|离开|exit|退出|disagree|不同意|^no$|^否$)/i;
         var positiveRe = /(18|同意|确认|agree|confirm|enter|yes|downloadwin)/i;
         var nodes = document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]');
@@ -203,6 +245,56 @@ private fun safeDestroyWebView(view: View?) {
             view.destroy()
         } catch (t: Throwable) {
             Log.w("AICL_WEBVIEW", "safeDestroyWebView failed", t)
+        }
+    }
+}
+
+private fun applyWebViewZoom(view: WebView?, targetPercent: Int) {
+    val clamped = clampZoomPercent(targetPercent)
+    try {
+        view?.setInitialScale(clamped)
+        view?.evaluateJavascript(
+            "try{if(document&&document.documentElement){document.documentElement.style.zoom='${clamped}%';}}catch(_){}",
+            null
+        )
+    } catch (t: Throwable) {
+        Log.w("AICL_WEBVIEW", "Failed applying WebView zoom=$clamped", t)
+    }
+}
+
+@Composable
+private fun WebViewZoomToolbar(
+    zoomPercent: Int,
+    onZoomOut: () -> Unit,
+    onZoomIn: () -> Unit,
+    onResetZoom: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "缩放：$zoomPercent%",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(
+                onClick = onZoomOut,
+                enabled = zoomPercent > MIN_ZOOM_PERCENT
+            ) {
+                Text(text = "-")
+            }
+            OutlinedButton(
+                onClick = onZoomIn,
+                enabled = zoomPercent < MAX_ZOOM_PERCENT
+            ) {
+                Text(text = "+")
+            }
+            TextButton(onClick = onResetZoom) {
+                Text(text = "100%")
+            }
         }
     }
 }
@@ -365,22 +457,30 @@ fun ShortCodeCaptureDialog(
     var loadErrorMessage by remember { mutableStateOf<String?>(null) }
     var clipboardCandidate by remember { mutableStateOf<Pair<String, String>?>(null) }
     var dismissedClipboardCode by remember { mutableStateOf<String?>(null) }
+    var zoomPercent by remember { mutableStateOf(DEFAULT_ZOOM_PERCENT) }
     val completed = remember { AtomicBoolean(false) }
+    val disposed = remember { AtomicBoolean(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val webViewHolder = remember { WebViewHolder<WebView>() }
 
     val tryCapture: (String) -> Boolean = { url ->
-        val parsed = GameSourceResolver.parseShortLinkUrl(url)
-        if (parsed != null) {
-            if (completed.compareAndSet(false, true)) {
-                runCatching {
-                    Log.i("AICL_PIPELINE", "phase=SHORTCODE_CAPTURED shortCode=${parsed.first}")
-                }
-                mainHandler.post { onCaptured(parsed.first, parsed.second) }
-            }
-            true
-        } else {
+        if (disposed.get()) {
             false
+        } else {
+            val parsed = GameSourceResolver.parseShortLinkUrl(url)
+            if (parsed != null) {
+                if (completed.compareAndSet(false, true)) {
+                    runCatching {
+                        Log.i("AICL_PIPELINE", "phase=SHORTCODE_CAPTURED shortCode=${parsed.first}")
+                    }
+                    mainHandler.post {
+                        if (!disposed.get()) onCaptured(parsed.first, parsed.second)
+                    }
+                }
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -425,6 +525,7 @@ fun ShortCodeCaptureDialog(
         }
         mainHandler.postDelayed(timeoutRunnable, GameSourceResolver.WEBVIEW_TIMEOUT_MS)
         onDispose {
+            disposed.set(true)
             mainHandler.removeCallbacksAndMessages(null)
             safeDestroyWebView(webViewHolder.ref)
             webViewHolder.ref = null
@@ -432,9 +533,9 @@ fun ShortCodeCaptureDialog(
     }
 
     fun scheduleDomPoll(view: WebView?, attempt: Int) {
-        if (attempt >= DOM_POLL_MAX_ATTEMPTS || completed.get() || view == null) return
+        if (attempt >= DOM_POLL_MAX_ATTEMPTS || disposed.get() || completed.get() || view == null) return
         mainHandler.postDelayed({
-            if (completed.get() || webViewHolder.ref !== view) return@postDelayed
+            if (disposed.get() || completed.get() || webViewHolder.ref !== view) return@postDelayed
             try {
                 view.evaluateJavascript(SMART_CAPTURE_AND_AGREE_JS) { raw ->
                     val cleaned = raw?.trim()?.trim('"')?.replace("\\/", "/") ?: ""
@@ -506,6 +607,23 @@ fun ShortCodeCaptureDialog(
                     }
                 }
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                WebViewZoomToolbar(
+                    zoomPercent = zoomPercent,
+                    onZoomOut = {
+                        val next = clampZoomPercent(zoomPercent - ZOOM_STEP_PERCENT)
+                        zoomPercent = next
+                        applyWebViewZoom(webViewHolder.ref, next)
+                    },
+                    onZoomIn = {
+                        val next = clampZoomPercent(zoomPercent + ZOOM_STEP_PERCENT)
+                        zoomPercent = next
+                        applyWebViewZoom(webViewHolder.ref, next)
+                    },
+                    onResetZoom = {
+                        zoomPercent = RESET_ZOOM_PERCENT
+                        applyWebViewZoom(webViewHolder.ref, RESET_ZOOM_PERCENT)
+                    }
+                )
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -524,8 +642,24 @@ fun ShortCodeCaptureDialog(
                                         runCatching { CookieManager.getInstance().setAcceptCookie(true) }
                                         settings.javaScriptEnabled = true
                                         settings.domStorageEnabled = true
-                                        settings.userAgentString = CAPTURE_CHROME_UA
+                                        settings.userAgentString = DESKTOP_CHROME_UA
+                                        settings.loadWithOverviewMode = true
+                                        settings.useWideViewPort = true
+                                        settings.setSupportZoom(true)
+                                        settings.builtInZoomControls = true
+                                        settings.displayZoomControls = false
+                                        setInitialScale(zoomPercent)
                                         webViewClient = object : WebViewClient() {
+                                            override fun onScaleChanged(view: WebView?, oldScale: Float, newScale: Float) {
+                                                super.onScaleChanged(view, oldScale, newScale)
+                                                if (newScale > 0f && !disposed.get()) {
+                                                    mainHandler.post {
+                                                        if (!disposed.get()) {
+                                                            zoomPercent = clampZoomPercent((newScale * 100f).toInt())
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                 super.onPageStarted(view, url, favicon)
                                                 mainHandler.post {
@@ -573,12 +707,23 @@ fun ShortCodeCaptureDialog(
 
                                             override fun onPageFinished(view: WebView?, url: String?) {
                                                 super.onPageFinished(view, url)
+                                                if (disposed.get()) return
+                                                try {
+                                                    view?.evaluateJavascript(VIEWPORT_UNLOCK_JS, null)
+                                                    if (zoomPercent != DEFAULT_ZOOM_PERCENT) {
+                                                        applyWebViewZoom(view, zoomPercent)
+                                                    }
+                                                } catch (t: Throwable) {
+                                                    Log.w("AICL_WEBVIEW", "Failed injecting viewport unlock JS", t)
+                                                }
                                                 if (!url.isNullOrBlank()) {
                                                     tryCapture(url)
                                                 }
                                                 mainHandler.post {
-                                                    pageFinished = true
-                                                    isLoading = false
+                                                    if (!disposed.get()) {
+                                                        pageFinished = true
+                                                        isLoading = false
+                                                    }
                                                 }
                                                 scheduleDomPoll(view, 0)
                                             }
@@ -705,6 +850,7 @@ fun WebViewDownloadDialog(
     var loadErrorMessage by remember { mutableStateOf<String?>(null) }
     val startedDownload = remember { AtomicBoolean(false) }
     val cancelled = remember { AtomicBoolean(false) }
+    val disposed = remember { AtomicBoolean(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val webViewHolder = remember { WebViewHolder<WebView>() }
 
@@ -723,6 +869,7 @@ fun WebViewDownloadDialog(
             Log.i("AICL_PIPELINE", "phase=DOWNLOAD_START itemId=${task.itemId} sourceKind=WEBVIEW_MAIN fp=${task.urlFp}")
         }
         onDispose {
+            disposed.set(true)
             cancelled.set(true)
             mainHandler.removeCallbacksAndMessages(null)
             safeDestroyWebView(webViewHolder.ref)
@@ -772,7 +919,13 @@ fun WebViewDownloadDialog(
                                         }
                                         settings.javaScriptEnabled = true
                                         settings.domStorageEnabled = true
-                                        settings.userAgentString = CAPTURE_CHROME_UA
+                                        settings.userAgentString = DESKTOP_CHROME_UA
+                                        settings.loadWithOverviewMode = true
+                                        settings.useWideViewPort = true
+                                        settings.setSupportZoom(true)
+                                        settings.builtInZoomControls = true
+                                        settings.displayZoomControls = false
+                                        setInitialScale(DEFAULT_ZOOM_PERCENT)
                                         webViewClient = object : WebViewClient() {
                                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                 super.onPageStarted(view, url, favicon)
@@ -785,9 +938,17 @@ fun WebViewDownloadDialog(
 
                                             override fun onPageFinished(view: WebView?, url: String?) {
                                                 super.onPageFinished(view, url)
+                                                if (disposed.get()) return
+                                                try {
+                                                    view?.evaluateJavascript(VIEWPORT_UNLOCK_JS, null)
+                                                } catch (t: Throwable) {
+                                                    Log.w("AICL_WEBVIEW", "Failed injecting viewport unlock JS in download dialog", t)
+                                                }
                                                 mainHandler.post {
-                                                    pageFinished = true
-                                                    isLoading = false
+                                                    if (!disposed.get()) {
+                                                        pageFinished = true
+                                                        isLoading = false
+                                                    }
                                                 }
                                             }
 
@@ -811,7 +972,7 @@ fun WebViewDownloadDialog(
                                             val cookies = runCatching {
                                                 CookieManager.getInstance().getCookie(targetUrl).orEmpty()
                                             }.getOrDefault("")
-                                            val ua = userAgent?.takeIf { it.isNotBlank() } ?: CAPTURE_CHROME_UA
+                                            val ua = userAgent?.takeIf { it.isNotBlank() } ?: DESKTOP_CHROME_UA
                                             mainHandler.post {
                                                 isLoading = false
                                                 statusText = "已接管下载流，正在写入缓存..."

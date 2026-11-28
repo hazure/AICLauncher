@@ -25,4 +25,14 @@ class WebViewCaptureHelpersTest {
         assertNull(extractClipboardShortCode("https://example.com/other/file.7z"))
         assertNull(extractClipboardShortCode("普通剪贴板文本"))
     }
+
+    @Test
+    fun clampZoomPercent_andDesktopUa_matchExpectedContract() {
+        assertEquals(MIN_ZOOM_PERCENT, clampZoomPercent(10))
+        assertEquals(80, clampZoomPercent(80))
+        assertEquals(MAX_ZOOM_PERCENT, clampZoomPercent(220))
+        assertEquals(true, DESKTOP_CHROME_UA.contains("Windows NT"))
+        assertEquals(true, DESKTOP_CHROME_UA.contains("Chrome/"))
+        assertEquals(false, DESKTOP_CHROME_UA.contains("Mobile"))
+    }
 }
