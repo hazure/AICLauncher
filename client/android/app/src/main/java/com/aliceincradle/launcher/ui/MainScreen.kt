@@ -366,7 +366,9 @@ fun MainScreen(viewModel: MainViewModel) {
         if (!useExternalRelayFallback) {
             GeckoCaptureDialog(
                 onCaptured = { code, fileName -> viewModel.onShortCodeCaptured(code, fileName) },
-                onDirectDownloadUrl = { url, fileName -> viewModel.onDirectDownloadUrlCaptured(url, fileName) },
+                onDirectDownloadUrl = { url, fileName, bodyStream, contentLength ->
+                    viewModel.onDirectDownloadUrlCaptured(url, fileName, bodyStream, contentLength)
+                },
                 onFallbackExternalRelay = { useExternalRelayFallback = true },
                 onFallbackManual = { viewModel.onShortCodeCaptureCancelled(openManualDialog = true) },
                 onDismiss = { viewModel.onShortCodeCaptureCancelled(openManualDialog = false) }

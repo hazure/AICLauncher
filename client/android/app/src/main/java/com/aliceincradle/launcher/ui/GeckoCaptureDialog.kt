@@ -41,6 +41,7 @@ import com.aliceincradle.launcher.bridge.GeckoDesktopIdentity
 import com.aliceincradle.launcher.bridge.GeckoRuntimeManager
 import com.aliceincradle.launcher.bridge.GeckoRuntimeStatus
 import com.aliceincradle.launcher.bridge.ShortCodeRelayExtractor
+import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.ContentBlocking
@@ -56,7 +57,7 @@ private class GeckoRefHolder<T>(var ref: T? = null)
 @Composable
 fun GeckoCaptureDialog(
     onCaptured: (shortCode: String, fileName: String) -> Unit,
-    onDirectDownloadUrl: (url: String, fileName: String) -> Unit,
+    onDirectDownloadUrl: (url: String, fileName: String, bodyStream: InputStream?, contentLength: Long) -> Unit,
     onFallbackExternalRelay: () -> Unit,
     onFallbackManual: () -> Unit,
     onDismiss: () -> Unit
@@ -257,11 +258,18 @@ fun GeckoCaptureDialog(
                         session: GeckoSession,
                         response: WebResponse
                     ) {
+                        var streamTransferred = false
                         try {
                             val uri = response.uri
                             val contentDisp = response.headers.entries
                                 .firstOrNull { it.key.equals("content-disposition", ignoreCase = true) }
                                 ?.value
+                            val contentLength = response.headers.entries
+                                .firstOrNull { it.key.equals("content-length", ignoreCase = true) }
+                                ?.value
+                                ?.trim()
+                                ?.toLongOrNull()
+                                ?: -1L
                             val fileName = GeckoDesktopIdentity.extractFileNameFromContentDisposition(
                                 contentDisposition = contentDisp,
                                 fallbackUrl = uri
@@ -271,16 +279,23 @@ fun GeckoCaptureDialog(
                                 !disposed.get() &&
                                 completed.compareAndSet(false, true)
                             ) {
+                                runCatching { response.setReadTimeoutMillis(60_000L) }
+                                val bodyStream = response.body
+                                streamTransferred = bodyStream != null
                                 mainHandler.post {
                                     if (!disposed.get()) {
-                                        onDirectDownloadUrl(uri, fileName)
+                                        onDirectDownloadUrl(uri, fileName, bodyStream, contentLength)
+                                    } else {
+                                        runCatching { bodyStream?.close() }
                                     }
                                 }
                             }
                         } catch (t: Throwable) {
                             Log.e("AICL_GECKO", "Failed handling Gecko onExternalResponse", t)
                         } finally {
-                            runCatching { response.body?.close() }
+                            if (!streamTransferred) {
+                                runCatching { response.body?.close() }
+                            }
                         }
                     }
                 }

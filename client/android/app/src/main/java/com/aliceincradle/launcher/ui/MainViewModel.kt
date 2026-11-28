@@ -427,12 +427,20 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
-    fun onDirectDownloadUrlCaptured(url: String, fileName: String) {
+    fun onDirectDownloadUrlCaptured(
+        url: String,
+        fileName: String,
+        bodyStream: java.io.InputStream? = null,
+        contentLength: Long = -1L
+    ) {
         val pendingItemId = _uiState.value.downloadPage.pendingCaptureItemId
         _uiState.update { state ->
             state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = null))
         }
-        if (pendingItemId.isNullOrBlank() || url.isBlank()) return
+        if (pendingItemId.isNullOrBlank() || url.isBlank()) {
+            runCatching { bodyStream?.close() }
+            return
+        }
         val target = _uiState.value.downloadPage.allItems.find { it.id == pendingItemId }
         val cleanName = fileName.ifBlank { target?.fileName?.ifBlank { "$pendingItemId.7z" } ?: "$pendingItemId.7z" }
         val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
@@ -441,8 +449,14 @@ class MainViewModel @JvmOverloads constructor(
                 itemId = pendingItemId,
                 url = url,
                 destFile = File(downloadDir, cleanName),
-                expectedBytes = target?.sizeBytes ?: 0L,
-                sourceChannel = com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK
+                expectedBytes = if (contentLength > 0L) contentLength else (target?.sizeBytes ?: 0L),
+                sourceChannel = if (bodyStream != null) {
+                    com.aliceincradle.launcher.data.DownloadSourceChannel.WEBVIEW_MAIN
+                } else {
+                    com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK
+                },
+                preOpenedStream = bodyStream,
+                preOpenedContentLength = contentLength
             )
         )
     }

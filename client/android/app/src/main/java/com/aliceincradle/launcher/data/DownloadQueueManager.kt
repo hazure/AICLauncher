@@ -10,6 +10,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
@@ -214,7 +215,9 @@ data class DownloadRequest(
     val expectedBytes: Long = 0L,
     val expectedSha256: String? = null,
     val sourceChannel: DownloadSourceChannel = DownloadSourceChannel.HTTP_FALLBACK,
-    val reResolveUrl: (suspend () -> String?)? = null
+    val reResolveUrl: (suspend () -> String?)? = null,
+    val preOpenedStream: InputStream? = null,
+    val preOpenedContentLength: Long = -1L
 )
 
 interface DownloadProgressListener {
@@ -273,6 +276,7 @@ class DownloadQueueManager(
                         SafeProbeIo.warn(TAG, "Download failed for ${request.itemId}", e)
                         listener?.onFailed(request.itemId, e.message ?: "下载失败")
                     } finally {
+                        runCatching { request.preOpenedStream?.close() }
                         activeJobs.remove(request.itemId)
                         activePartFiles.remove(request.itemId)
                     }
@@ -286,7 +290,9 @@ class DownloadQueueManager(
     }
 
     fun enqueue(request: DownloadRequest) {
-        queue.trySend(request)
+        if (queue.trySend(request).isFailure) {
+            runCatching { request.preOpenedStream?.close() }
+        }
     }
 
     fun cancel(itemId: String) {
@@ -321,10 +327,62 @@ class DownloadQueueManager(
             return File("downloads").apply { mkdirs() }
         }
 
+        private suspend fun downloadFromPreOpenedStream(
+            request: DownloadRequest,
+            inputStream: InputStream,
+            listener: DownloadProgressListener
+        ) {
+            val parent = request.destFile.parentFile
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                throw IOException("无法创建下载目录：${parent.absolutePath}")
+            }
+            val partFile = File(parent, "${request.destFile.name}.part")
+            val totalBytes = request.preOpenedContentLength.takeIf { it > 0L } ?: request.expectedBytes
+            val fp = GameSourceResolver.urlFingerprint(request.url)
+            val buffer = ByteArray(BUFFER_SIZE)
+            var downloaded = 0L
+            var lastEmitTime = 0L
+
+            inputStream.use { input ->
+                FileOutputStream(partFile, false).use { output ->
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        val now = System.currentTimeMillis()
+                        if (now - lastEmitTime >= PROGRESS_EMIT_INTERVAL_MS) {
+                            lastEmitTime = now
+                            val percent = if (totalBytes > 0L) {
+                                ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99)
+                            } else {
+                                0
+                            }
+                            listener.onProgress(request.itemId, downloaded, totalBytes, percent)
+                        }
+                    }
+                }
+            }
+
+            verifyMagicAndFinalize(
+                partFile = partFile,
+                destFile = request.destFile,
+                expectedSha256 = request.expectedSha256,
+                fp = fp
+            ).getOrThrow()
+            listener.onProgress(request.itemId, downloaded, totalBytes.coerceAtLeast(downloaded), 100)
+            listener.onCompleted(request.itemId, request.destFile)
+        }
+
         private suspend fun downloadViaHttpUrlConnection(
             request: DownloadRequest,
             listener: DownloadProgressListener
         ) {
+            if (request.preOpenedStream != null) {
+                downloadFromPreOpenedStream(request, request.preOpenedStream, listener)
+                return
+            }
             val parent = request.destFile.parentFile
             if (parent != null && !parent.exists() && !parent.mkdirs()) {
                 throw IOException("无法创建下载目录：${parent.absolutePath}")
