@@ -313,15 +313,16 @@ class MainViewModel @JvmOverloads constructor(
                         )
                     )
                 }
-            }.onFailure {
+            }.onFailure { err ->
+                val msg = err.message ?: "索引获取失败，请检查网络或稍后重试"
                 _uiState.update { state ->
                     state.copy(
                         downloadPage = state.downloadPage.copy(
                             allItems = emptyList(),
                             items = emptyList(),
                             isLoadingCatalog = false,
-                            catalogError = "索引获取失败，请检查网络或稍后重试",
-                            statsText = "索引获取失败，请检查网络或稍后重试"
+                            catalogError = msg,
+                            statsText = msg
                         )
                     )
                 }

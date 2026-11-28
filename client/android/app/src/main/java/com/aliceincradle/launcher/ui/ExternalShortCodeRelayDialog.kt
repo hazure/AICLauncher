@@ -13,11 +13,13 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,12 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.aliceincradle.launcher.bridge.ExternalBrowserLauncher
-import com.aliceincradle.launcher.bridge.ExternalLaunchResult
-import com.aliceincradle.launcher.bridge.ExtractedShortCode
 import com.aliceincradle.launcher.bridge.GameSourceResolver
-import com.aliceincradle.launcher.bridge.ShortCodeRelayExtractor
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
+import com.aliceincradle.launcher.bridge.ShortCodeRelayStateMachine
 
 private object ShortCodeRelayMemory {
     private val lock = Any()
@@ -51,8 +49,8 @@ private object ShortCodeRelayMemory {
 }
 
 /**
- * Module C: Guided external browser / Custom Tabs relay with ON_RESUME clipboard capture
- * and re-entrancy protection.
+ * Module C: Guided external browser / Custom Tabs relay backed by [ShortCodeRelayStateMachine]
+ * with ON_RESUME clipboard capture, inline manual fallback, and re-entrancy protection.
  */
 @Composable
 fun ExternalShortCodeRelayDialog(
@@ -62,28 +60,16 @@ fun ExternalShortCodeRelayDialog(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val sessionToken = remember { AtomicInteger(0) }
-    val completed = remember { AtomicBoolean(false) }
-    val disposed = remember { AtomicBoolean(false) }
+    val stateMachine = remember { ShortCodeRelayStateMachine(ShortCodeRelayMemory.snapshot()) }
+    val uiState by stateMachine.state.collectAsState()
+    var manualDraft by remember { mutableStateOf("") }
 
-    var launchStatusText by remember {
-        mutableStateOf("请通过外部浏览器完成官方下载页验证后复制链接或短码。")
-    }
-    var detectedCandidate by remember { mutableStateOf<ExtractedShortCode?>(null) }
-
-    fun scanClipboard(token: Int = sessionToken.get()) {
-        if (disposed.get() || completed.get() || token != sessionToken.get()) return
+    fun scanClipboard() {
         try {
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             val clipText = cm?.primaryClip?.takeIf { it.itemCount > 0 }
                 ?.getItemAt(0)?.coerceToText(context)?.toString()
-            val extracted = ShortCodeRelayExtractor.extract(
-                rawText = clipText,
-                consumedFingerprints = ShortCodeRelayMemory.snapshot()
-            )
-            if (!disposed.get() && !completed.get() && token == sessionToken.get()) {
-                detectedCandidate = extracted
-            }
+            stateMachine.onResumeClipboardText(clipText)
         } catch (t: Throwable) {
             Log.w("AICL_RELAY", "Failed reading clipboard", t)
         }
@@ -103,8 +89,7 @@ fun ExternalShortCodeRelayDialog(
 
     DisposableEffect(Unit) {
         onDispose {
-            disposed.set(true)
-            sessionToken.incrementAndGet()
+            stateMachine.markDisposed()
         }
     }
 
@@ -112,24 +97,15 @@ fun ExternalShortCodeRelayDialog(
         onDismissRequest = onDismiss,
         title = { Text(text = "外部浏览器获取短码") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = "1. 点击下方按钮打开外部浏览器，完成年龄/人机验证并复制下载链接或短码。",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Button(
                     onClick = {
-                        when (val res = ExternalBrowserLauncher.openUrl(context, GameSourceResolver.OFFICIAL_WIN_URL)) {
-                            is ExternalLaunchResult.OpenedCustomTabs -> {
-                                launchStatusText = "已拉起 Custom Tabs，完成验证并复制后切回 AICL。"
-                            }
-                            is ExternalLaunchResult.OpenedSystemBrowser -> {
-                                launchStatusText = "已拉起系统浏览器，完成验证并复制后切回 AICL。"
-                            }
-                            is ExternalLaunchResult.Unavailable -> {
-                                launchStatusText = res.reason
-                            }
-                        }
+                        val res = ExternalBrowserLauncher.openUrl(context, GameSourceResolver.OFFICIAL_WIN_URL)
+                        stateMachine.onExternalLaunch(res)
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -140,7 +116,6 @@ fun ExternalShortCodeRelayDialog(
                         try {
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             cm?.setPrimaryClip(ClipData.newPlainText("AICL Official URL", GameSourceResolver.OFFICIAL_WIN_URL))
-                            launchStatusText = "已复制官方下载页链接，可粘贴到任意浏览器打开。"
                         } catch (t: Throwable) {
                             Log.w("AICL_RELAY", "Failed copying official URL", t)
                         }
@@ -150,11 +125,11 @@ fun ExternalShortCodeRelayDialog(
                     Text(text = "复制官方下载页链接")
                 }
                 Text(
-                    text = "2. 切回 AICL 后将自动识别剪贴板；也可点击下方「手动填入短码」。",
+                    text = "2. 切回 AICL 后将自动识别剪贴板；也可直接在下方手动填入短码。",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Text(
-                    text = launchStatusText,
+                    text = uiState.launchStatus,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -162,7 +137,7 @@ fun ExternalShortCodeRelayDialog(
                     Text(text = "重新检查剪贴板")
                 }
 
-                detectedCandidate?.let { candidate ->
+                uiState.candidate?.let { candidate ->
                     Surface(
                         color = MaterialTheme.colorScheme.secondaryContainer,
                         shape = MaterialTheme.shapes.small,
@@ -182,10 +157,9 @@ fun ExternalShortCodeRelayDialog(
                             )
                             TextButton(
                                 onClick = {
-                                    if (!disposed.get() && completed.compareAndSet(false, true)) {
-                                        sessionToken.incrementAndGet()
-                                        ShortCodeRelayMemory.markConsumed(candidate.fingerprint)
-                                        onCaptured(candidate.shortCode, candidate.fileName)
+                                    stateMachine.confirmCandidate()?.let { confirmed ->
+                                        ShortCodeRelayMemory.markConsumed(confirmed.fingerprint)
+                                        onCaptured(confirmed.shortCode, confirmed.fileName)
                                     }
                                 }
                             ) {
@@ -194,7 +168,7 @@ fun ExternalShortCodeRelayDialog(
                             TextButton(
                                 onClick = {
                                     ShortCodeRelayMemory.markConsumed(candidate.fingerprint)
-                                    detectedCandidate = null
+                                    stateMachine.dismissCandidate()
                                 }
                             ) {
                                 Text(text = "忽略")
@@ -202,11 +176,36 @@ fun ExternalShortCodeRelayDialog(
                         }
                     }
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = manualDraft,
+                        onValueChange = { manualDraft = it },
+                        label = { Text(text = "手动填入短码") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedButton(
+                        enabled = manualDraft.isNotBlank(),
+                        onClick = {
+                            stateMachine.confirmManualInput(manualDraft)?.let { confirmed ->
+                                ShortCodeRelayMemory.markConsumed(confirmed.fingerprint)
+                                onCaptured(confirmed.shortCode, confirmed.fileName)
+                            }
+                        }
+                    ) {
+                        Text(text = "确认")
+                    }
+                }
             }
         },
         confirmButton = {
             OutlinedButton(onClick = onFallbackManual) {
-                Text(text = "手动填入短码")
+                Text(text = "高级短码设置")
             }
         },
         dismissButton = {

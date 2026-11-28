@@ -66,23 +66,61 @@ class DefaultCatalogHttpClient : CatalogHttpClient {
  * Never falls back to hardcoded mock items on network failure.
  */
 open class RemoteCatalogFetcher(
-    private val httpClient: CatalogHttpClient = DefaultCatalogHttpClient()
+    private val httpClient: CatalogHttpClient = DefaultCatalogHttpClient(),
+    private val cacheFileProvider: () -> File? = { null }
 ) {
     open fun fetchCatalog(downloadDir: File?): Result<List<DownloadCatalogItem>> {
-        return runCatching {
-            val rawJson = httpClient.fetchText(RAW_CATALOG_URL)
-            val items = parseCatalogJson(rawJson, downloadDir)
-            if (items.isEmpty()) {
-                throw IOException("索引获取失败，请检查网络或稍后重试")
+        var lastError: Throwable? = null
+        val effectiveCacheFile = runCatching { cacheFileProvider() }.getOrNull()
+        for (url in CATALOG_CANDIDATE_URLS) {
+            try {
+                val rawJson = httpClient.fetchText(url)
+                val items = parseCatalogJson(rawJson, downloadDir)
+                if (items.isNotEmpty()) {
+                    persistCatalogCache(rawJson, effectiveCacheFile)
+                    return Result.success(items)
+                }
+            } catch (t: Throwable) {
+                lastError = t
+                SafeProbeIo.warn(TAG, "Remote catalog fetch failed for $url: ${t.message}", t)
             }
-            items
-        }.recoverCatching { err ->
-            SafeProbeIo.warn(TAG, "Remote catalog fetch failed: ${err.message}", err)
-            throw IOException("索引获取失败，请检查网络或稍后重试", err)
+        }
+
+        if (effectiveCacheFile != null && effectiveCacheFile.isFile && effectiveCacheFile.length() > 0L) {
+            try {
+                val cachedJson = effectiveCacheFile.readText(Charsets.UTF_8)
+                val cachedItems = parseCatalogJson(cachedJson, downloadDir)
+                if (cachedItems.isNotEmpty()) {
+                    return Result.success(cachedItems)
+                }
+            } catch (t: Throwable) {
+                lastError = t
+                SafeProbeIo.warn(TAG, "Failed reading cached catalog file: ${t.message}", t)
+            }
+        }
+
+        return Result.failure(
+            IOException("索引获取失败，请检查网络或稍后重试", lastError)
+        )
+    }
+
+    private fun persistCatalogCache(rawJson: String, cacheFile: File?) {
+        try {
+            if (cacheFile == null) return
+            cacheFile.parentFile?.mkdirs()
+            val tmp = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+            tmp.writeText(rawJson, Charsets.UTF_8)
+            if (cacheFile.exists()) cacheFile.delete()
+            if (!tmp.renameTo(cacheFile)) {
+                tmp.copyTo(cacheFile, overwrite = true)
+                tmp.delete()
+            }
+        } catch (t: Throwable) {
+            SafeProbeIo.warn(TAG, "Failed persisting catalog cache: ${t.message}", t)
         }
     }
 
-    internal fun parseCatalogJson(rawJson: String, downloadDir: File?): List<DownloadCatalogItem> {
+    internal open fun parseCatalogJson(rawJson: String, downloadDir: File?): List<DownloadCatalogItem> {
         val trimmed = rawJson.trim()
         val array = if (trimmed.startsWith("[")) {
             JSONArray(trimmed)
@@ -152,6 +190,14 @@ open class RemoteCatalogFetcher(
     companion object {
         private const val TAG = "RemoteCatalogFetcher"
         const val RAW_CATALOG_URL = "https://raw.githubusercontent.com/hazure/AICLauncher/nocheck_dev/catalog.json"
+        val CATALOG_CANDIDATE_URLS = listOf(
+            RAW_CATALOG_URL,
+            "https://cdn.jsdelivr.net/gh/hazure/AICLauncher@nocheck_dev/catalog.json"
+        )
+
+        fun resolveCatalogCacheFile(context: Context?): File? {
+            return context?.filesDir?.let { File(File(it, "catalog"), "catalog_cache.json") }
+        }
     }
 }
 

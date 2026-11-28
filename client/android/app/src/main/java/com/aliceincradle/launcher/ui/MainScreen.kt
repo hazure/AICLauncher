@@ -196,6 +196,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 onRefreshCatalog = { viewModel.refreshDownloadCatalog() },
                 onDetailClick = { viewModel.openCatalogItemDetail(it) },
                 onDismissDetail = { viewModel.dismissCatalogItemDetail() },
+                onOpenManualShortCode = { viewModel.openManualShortCodeDialog() },
                 modifier = contentModifier
             )
 
