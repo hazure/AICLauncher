@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, reopened, edited, ready_for_review]
     branches: [main, dev, nocheck_dev]
   workflow_run:
-    workflows: ["Android Build & Release"]
+    workflows: ["PR Build Check"]
     types: [completed]
 
 permissions:
@@ -203,8 +203,13 @@ jobs:
 
           # 5. nocheck_dev isolation check
           if base_ref == "nocheck_dev":
-              has_build_yml = ".github/workflows/build.yml" in changed_files or os.path.exists(".github/workflows/build.yml")
-              record("5. nocheck_dev 隔离检查 (禁止 build.yml)", not has_build_yml, "OK" if not has_build_yml else "build.yml must NOT exist on nocheck_dev")
+              has_build_yml = (
+                  ".github/workflows/build.yml" in changed_files
+                  or ".github/workflows/pr-build.yml" in changed_files
+                  or os.path.exists(".github/workflows/build.yml")
+                  or os.path.exists(".github/workflows/pr-build.yml")
+              )
+              record("5. nocheck_dev 隔离检查 (禁止 build.yml/pr-build.yml)", not has_build_yml, "OK" if not has_build_yml else "build.yml/pr-build.yml must NOT exist on nocheck_dev")
           else:
               record("5. nocheck_dev 隔离检查", True, f"Skipped (base={base_ref})")
 
@@ -342,9 +347,9 @@ jobs:
             }
 
             if (pr.base.ref === 'dev') {
-              const buildRun = checks.check_runs.find(r => r.name === 'build-debug-apk');
+              const buildRun = checks.check_runs.find(r => r.name === 'pr-build-check');
               if (!buildRun || buildRun.conclusion !== 'success') {
-                core.info(`build-debug-apk on dev not yet succeeded (status=${buildRun?.status}, conclusion=${buildRun?.conclusion}).`);
+                core.info(`pr-build-check on dev not yet succeeded (status=${buildRun?.status}, conclusion=${buildRun?.conclusion}).`);
                 return;
               }
             }
