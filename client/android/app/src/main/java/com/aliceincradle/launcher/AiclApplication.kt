@@ -7,11 +7,14 @@ import android.os.HandlerThread
 import android.util.Log
 import com.tencent.smtt.export.external.TbsCoreSettings
 import com.tencent.smtt.sdk.QbSdk
+import com.tencent.smtt.sdk.TbsListener
 import com.tencent.smtt.sdk.TbsPrivacyAccess
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,17 +46,14 @@ class AiclApplication : Application() {
         }
     }
 
+    companion object {
+        private const val OFFLINE_X5_ASSET_NAME = "tbs_core_046285_arm64_v8a.tbs.apk"
+        private const val OFFLINE_X5_CORE_VERSION = 46285
+    }
+
     override fun onCreate() {
         super.onCreate()
         installCrashSummaryHandler()
-
-        if (!hasBundledX5NativeLibrary()) {
-            runCatching { QbSdk.forceSysWebView() }
-                .onFailure { Log.w("AICL_X5", "QbSdk.forceSysWebView failed", it) }
-            X5EngineState.update(X5InitStatus.FALLBACK_SYSTEM)
-            Log.i("AICL_X5", "X5 init FALLBACK: no bundled X5 native library detected, using system WebView")
-            return
-        }
 
         Handler(x5InitThread.looper).post {
             try {
@@ -82,28 +82,71 @@ class AiclApplication : Application() {
                 }.onFailure { Log.w("AICL_X5", "QbSdk.initTbsSettings failed", it) }
                 runCatching { QbSdk.setDownloadWithoutWifi(true) }
                     .onFailure { Log.w("AICL_X5", "QbSdk.setDownloadWithoutWifi failed", it) }
-                QbSdk.initX5Environment(
-                    applicationContext,
-                    object : QbSdk.PreInitCallback {
-                        override fun onCoreInitFinished() {
-                            Log.i("AICL_X5", "X5 core init finished")
-                        }
 
-                        override fun onViewInitFinished(isX5Core: Boolean) {
-                            val next = if (isX5Core) {
-                                X5InitStatus.READY_X5
-                            } else {
-                                X5InitStatus.FALLBACK_SYSTEM
-                            }
-                            X5EngineState.update(next)
-                            if (isX5Core) {
-                                Log.i("AICL_X5", "X5 init SUCCESS: X5 WebView core ready")
-                            } else {
-                                Log.w("AICL_X5", "X5 init FALLBACK: X5 unavailable, switched to system WebView")
-                            }
+                val localInstallPending = AtomicBoolean(false)
+                lateinit var preInitCallback: QbSdk.PreInitCallback
+                preInitCallback = object : QbSdk.PreInitCallback {
+                    override fun onCoreInitFinished() {
+                        Log.i("AICL_X5", "X5 core init finished")
+                    }
+
+                    override fun onViewInitFinished(isX5Core: Boolean) {
+                        val canLoad = runCatching { QbSdk.canLoadX5(applicationContext) }.getOrDefault(false)
+                        val ver = runCatching { QbSdk.getTbsVersion(applicationContext) }.getOrDefault(0)
+                        if (isX5Core || canLoad) {
+                            X5EngineState.update(X5InitStatus.READY_X5)
+                            Log.i("AICL_X5", "X5 init SUCCESS: X5 WebView core ready (isX5Core=$isX5Core, tbsVersion=$ver)")
+                        } else if (!localInstallPending.get()) {
+                            X5EngineState.update(X5InitStatus.FALLBACK_SYSTEM)
+                            Log.w("AICL_X5", "X5 init FALLBACK: X5 unavailable (tbsVersion=$ver), switched to system WebView")
+                        } else {
+                            Log.i("AICL_X5", "X5 init waiting for offline core install completion (tbsVersion=$ver)")
                         }
                     }
-                )
+                }
+
+                QbSdk.setTbsListener(object : TbsListener {
+                    override fun onDownloadFinish(code: Int) {
+                        Log.i("AICL_X5", "X5 onDownloadFinish: code=$code")
+                    }
+
+                    override fun onDownloadProgress(progress: Int) {
+                        Log.i("AICL_X5", "X5 onDownloadProgress: $progress%")
+                    }
+
+                    override fun onInstallFinish(code: Int) {
+                        localInstallPending.set(false)
+                        val canLoad = runCatching { QbSdk.canLoadX5(applicationContext) }.getOrDefault(false)
+                        val ver = runCatching { QbSdk.getTbsVersion(applicationContext) }.getOrDefault(0)
+                        Log.i("AICL_X5", "X5 onInstallFinish: code=$code, canLoadX5=$canLoad, tbsVersion=$ver")
+                        if (canLoad || code == 200 || code == 232) {
+                            if (canLoad) {
+                                X5EngineState.update(X5InitStatus.READY_X5)
+                            }
+                            runCatching { QbSdk.preInit(applicationContext, preInitCallback) }
+                                .onFailure { Log.w("AICL_X5", "QbSdk.preInit after local install failed", it) }
+                        } else {
+                            X5EngineState.update(X5InitStatus.FALLBACK_SYSTEM)
+                        }
+                    }
+                })
+
+                val installedVer = runCatching { QbSdk.getTbsVersion(applicationContext) }.getOrDefault(0)
+                val alreadyCanLoad = runCatching { QbSdk.canLoadX5(applicationContext) }.getOrDefault(false)
+                if (!alreadyCanLoad && installedVer < OFFLINE_X5_CORE_VERSION) {
+                    val localCoreFile = prepareOfflineCoreFile()
+                    if (localCoreFile != null && localCoreFile.length() > 0L) {
+                        localInstallPending.set(true)
+                        QbSdk.installLocalTbsCore(
+                            applicationContext,
+                            OFFLINE_X5_CORE_VERSION,
+                            localCoreFile.absolutePath
+                        )
+                        Log.i("AICL_X5", "X5 local core install triggered: version=$OFFLINE_X5_CORE_VERSION, size=${localCoreFile.length()}")
+                    }
+                }
+
+                QbSdk.initX5Environment(applicationContext, preInitCallback)
             } catch (t: Throwable) {
                 Log.e("AICL_X5", "X5 init FALLBACK: exception during async init", t)
                 runCatching { QbSdk.forceSysWebView() }
@@ -113,17 +156,37 @@ class AiclApplication : Application() {
         }
     }
 
-    private fun hasBundledX5NativeLibrary(): Boolean {
+    private fun prepareOfflineCoreFile(): File? {
         return try {
-            val nativeDir = applicationContext.applicationInfo?.nativeLibraryDir ?: return false
-            val files = File(nativeDir).listFiles() ?: return false
-            files.any { file ->
-                val name = file.name.lowercase(Locale.US)
-                name.endsWith(".so") && (name.contains("tbs") || name.contains("x5"))
+            val coreDir = File(applicationContext.filesDir, "x5_core")
+            if (!coreDir.exists()) {
+                coreDir.mkdirs()
             }
+            val target = File(coreDir, OFFLINE_X5_ASSET_NAME)
+            if (target.isFile && target.length() > 0L) {
+                return target
+            }
+            val tmp = File(coreDir, "$OFFLINE_X5_ASSET_NAME.tmp")
+            applicationContext.assets.open(OFFLINE_X5_ASSET_NAME).use { input ->
+                FileOutputStream(tmp).use { output ->
+                    val buf = ByteArray(16 * 1024)
+                    while (true) {
+                        val read = input.read(buf)
+                        if (read <= 0) break
+                        output.write(buf, 0, read)
+                    }
+                    output.flush()
+                }
+            }
+            if (target.exists()) target.delete()
+            if (!tmp.renameTo(target)) {
+                tmp.copyTo(target, overwrite = true)
+                tmp.delete()
+            }
+            target
         } catch (t: Throwable) {
-            Log.w("AICL_X5", "Failed probing nativeLibraryDir for X5 .so", t)
-            false
+            Log.e("AICL_X5", "Failed preparing offline X5 core from assets", t)
+            null
         }
     }
 

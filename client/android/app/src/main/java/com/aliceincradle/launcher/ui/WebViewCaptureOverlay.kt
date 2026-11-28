@@ -73,8 +73,8 @@ import kotlinx.coroutines.launch
 private const val CAPTURE_CHROME_UA =
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
-private const val X5_WAIT_TIMEOUT_MS = 2_500L
-private const val PAGE_LOAD_TIMEOUT_MS = 10_000L
+private const val X5_WAIT_TIMEOUT_MS = 4_000L
+private const val PAGE_LOAD_TIMEOUT_MS = 15_000L
 
 private val AUTO_AGREE_JS = """
     (function() {
@@ -99,6 +99,7 @@ private fun safeDestroyWebView(view: View?) {
                 view.stopLoading()
                 view.setDownloadListener(null)
                 view.webViewClient = WebViewClient()
+                view.webChromeClient = null
                 (view.parent as? ViewGroup)?.removeView(view)
                 view.removeAllViews()
                 view.destroy()
@@ -111,6 +112,7 @@ private fun safeDestroyWebView(view: View?) {
                 view.stopLoading()
                 view.setDownloadListener(null)
                 view.webViewClient = SystemWebViewClient()
+                view.webChromeClient = null
                 (view.parent as? ViewGroup)?.removeView(view)
                 view.removeAllViews()
                 view.destroy()
@@ -283,8 +285,8 @@ fun ShortCodeCaptureDialog(
         if (!pageFinished && !completed.get() && loadErrorMessage == null) {
             isLoading = false
             loadErrorMessage = "加载失败"
-            statusText = "页面加载超时（10s），请重试或去系统浏览器打开"
-            Log.w("AICL_X5", "ShortCodeCaptureDialog page load timed out after 10s (useX5=$useX5)")
+            statusText = "页面加载超时（15s），请重试或去系统浏览器打开"
+            Log.w("AICL_X5", "ShortCodeCaptureDialog page load timed out after 15s (useX5=$useX5)")
         }
     }
 
@@ -690,8 +692,8 @@ fun WebViewDownloadDialog(
         if (!pageFinished && !startedDownload.get() && loadErrorMessage == null) {
             isLoading = false
             loadErrorMessage = "加载失败"
-            statusText = "页面加载超时（10s），请重试或去系统浏览器打开"
-            Log.w("AICL_X5", "WebViewDownloadDialog page load timed out after 10s (useX5=$useX5)")
+            statusText = "页面加载超时（15s），请重试或去系统浏览器打开"
+            Log.w("AICL_X5", "WebViewDownloadDialog page load timed out after 15s (useX5=$useX5)")
         }
     }
 
