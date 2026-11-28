@@ -1,21 +1,23 @@
 package com.aliceincradle.launcher.ui
 
 import android.annotation.SuppressLint
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.CookieManager as SystemCookieManager
-import android.webkit.WebResourceError as SystemWebResourceError
-import android.webkit.WebResourceRequest as SystemWebResourceRequest
-import android.webkit.WebResourceResponse as SystemWebResourceResponse
-import android.webkit.WebView as SystemWebView
-import android.webkit.WebViewClient as SystemWebViewClient
+import android.webkit.CookieManager
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,7 +38,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -46,18 +47,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.aliceincradle.launcher.X5EngineState
-import com.aliceincradle.launcher.X5InitStatus
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.aliceincradle.launcher.bridge.GameSourceResolver
 import com.aliceincradle.launcher.data.WebViewDownloadTask
-import com.tencent.smtt.export.external.interfaces.WebResourceError
-import com.tencent.smtt.export.external.interfaces.WebResourceRequest
-import com.tencent.smtt.export.external.interfaces.WebResourceResponse
-import com.tencent.smtt.sdk.CookieManager
-import com.tencent.smtt.sdk.WebView
-import com.tencent.smtt.sdk.WebViewClient
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -73,52 +69,140 @@ import kotlinx.coroutines.launch
 private const val CAPTURE_CHROME_UA =
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
-private const val X5_WAIT_TIMEOUT_MS = 4_000L
+private const val MIN_RECOMMENDED_WEBVIEW_MAJOR = 115
 private const val PAGE_LOAD_TIMEOUT_MS = 15_000L
+private const val DOM_POLL_INTERVAL_MS = 500L
+private const val DOM_POLL_MAX_ATTEMPTS = 12
+private const val PLAY_STORE_WEBVIEW_MARKET_URI = "market://details?id=com.google.android.webview"
+private const val PLAY_STORE_WEBVIEW_HTTPS_URL = "https://play.google.com/store/apps/details?id=com.google.android.webview"
 
-private val AUTO_AGREE_JS = """
+private val URL_TOKEN_REGEX = Regex("""https?://\S+""")
+private val SHORTLINK_NO_SCHEME_REGEX = Regex("""vanilla\.shiro\.dev/f/\S+""", RegexOption.IGNORE_CASE)
+
+private val SMART_CAPTURE_AND_AGREE_JS = """
     (function() {
-        var pre = document.getElementById('preloader');
-        if (pre && pre.style.display !== 'none') return;
-        var btns = document.querySelectorAll('button, a');
-        for (var i = 0; i < btns.length; i++) {
-            var t = (btns[i].innerText || '').trim();
-            if (t === 'Agree' || t === '同意' || btns[i].getAttribute('data-action') === 'downloadWin') {
-                btns[i].click();
+        var links = document.querySelectorAll('a[href], [data-href], [data-url]');
+        for (var i = 0; i < links.length; i++) {
+            var cand = links[i].getAttribute('href') || links[i].getAttribute('data-href') || links[i].getAttribute('data-url') || '';
+            if (cand.indexOf('vanilla.shiro.dev/f/') !== -1) {
+                return cand;
             }
         }
+        var pre = document.getElementById('preloader');
+        if (pre) {
+            var cs = window.getComputedStyle ? window.getComputedStyle(pre) : pre.style;
+            if (cs && cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0') {
+                return 'WAIT';
+            }
+        }
+        var excludeRe = /(cancel|取消|leave|离开|exit|退出|disagree|不同意|^no$|^否$)/i;
+        var positiveRe = /(18|同意|确认|agree|confirm|enter|yes|downloadwin)/i;
+        var nodes = document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]');
+        for (var j = 0; j < nodes.length; j++) {
+            var el = nodes[j];
+            if (el.dataset && el.dataset.aiclClicked === '1') continue;
+            var style = window.getComputedStyle ? window.getComputedStyle(el) : el.style;
+            if (style && (style.display === 'none' || style.visibility === 'hidden')) continue;
+            var text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+            if (text && excludeRe.test(text)) continue;
+            var action = el.getAttribute('data-action') || '';
+            var cls = (el.className || '').toString();
+            var id = el.id || '';
+            var combined = text + ' ' + action + ' ' + cls + ' ' + id;
+            if (positiveRe.test(combined)) {
+                if (el.dataset) el.dataset.aiclClicked = '1';
+                try { el.click(); } catch (_) {}
+                try {
+                    if (typeof PointerEvent === 'function') {
+                        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+                        el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+                    }
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                } catch (_) {}
+                return 'CLICKED';
+            }
+        }
+        return 'NONE';
     })();
 """.trimIndent()
+
+internal data class WebViewVersionInfo(
+    val packageName: String?,
+    val versionName: String?,
+    val majorVersion: Int?
+)
+
+internal fun parseWebViewMajorVersion(versionName: String?): Int? {
+    val trimmed = versionName?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    val firstSegment = trimmed.substringBefore('.').takeWhile { it.isDigit() }
+    return firstSegment.toIntOrNull()
+}
+
+internal fun extractClipboardShortCode(rawText: String?): Pair<String, String>? {
+    return try {
+        val text = rawText?.trim().orEmpty()
+        if (text.isEmpty()) return null
+        for (match in URL_TOKEN_REGEX.findAll(text)) {
+            val cleaned = match.value.trimEnd(',', '.', ';', ')', ']', '"', '\'')
+            val parsed = GameSourceResolver.parseShortLinkUrl(cleaned)
+            if (parsed != null) return parsed
+        }
+        val noScheme = SHORTLINK_NO_SCHEME_REGEX.find(text)?.value
+            ?.trimEnd(',', '.', ';', ')', ']', '"', '\'')
+        if (!noScheme.isNullOrBlank()) {
+            return GameSourceResolver.parseShortLinkUrl("https://$noScheme")
+        }
+        null
+    } catch (t: Throwable) {
+        Log.w("AICL_WEBVIEW", "Failed parsing clipboard short code", t)
+        null
+    }
+}
+
+private fun detectSystemWebViewVersion(context: Context): WebViewVersionInfo {
+    return try {
+        val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WebView.getCurrentWebViewPackage()
+        } else {
+            runCatching {
+                val cls = Class.forName("android.webkit.WebViewFactory")
+                val m = cls.getMethod("getLoadedPackageInfo")
+                m.invoke(null) as? android.content.pm.PackageInfo
+            }.getOrNull() ?: listOf(
+                "com.google.android.webview",
+                "com.android.chrome",
+                "com.android.webview"
+            ).firstNotNullOfOrNull { pkg ->
+                runCatching { context.packageManager.getPackageInfo(pkg, 0) }.getOrNull()
+            }
+        }
+        val verName = pkgInfo?.versionName
+        WebViewVersionInfo(
+            packageName = pkgInfo?.packageName,
+            versionName = verName,
+            majorVersion = parseWebViewMajorVersion(verName)
+        )
+    } catch (t: Throwable) {
+        Log.w("AICL_WEBVIEW", "Failed detecting system WebView version", t)
+        WebViewVersionInfo(packageName = null, versionName = null, majorVersion = null)
+    }
+}
 
 private class WebViewHolder<T>(var ref: T? = null)
 
 private fun safeDestroyWebView(view: View?) {
-    when (view) {
-        is WebView -> {
-            try {
-                view.stopLoading()
-                view.setDownloadListener(null)
-                view.webViewClient = WebViewClient()
-                view.webChromeClient = null
-                (view.parent as? ViewGroup)?.removeView(view)
-                view.removeAllViews()
-                view.destroy()
-            } catch (t: Throwable) {
-                Log.w("AICL_X5", "safeDestroyWebView(X5) failed", t)
-            }
-        }
-        is SystemWebView -> {
-            try {
-                view.stopLoading()
-                view.setDownloadListener(null)
-                view.webViewClient = SystemWebViewClient()
-                view.webChromeClient = null
-                (view.parent as? ViewGroup)?.removeView(view)
-                view.removeAllViews()
-                view.destroy()
-            } catch (t: Throwable) {
-                Log.w("AICL_X5", "safeDestroyWebView(System) failed", t)
-            }
+    if (view is WebView) {
+        try {
+            view.stopLoading()
+            view.setDownloadListener(null)
+            view.webViewClient = WebViewClient()
+            view.webChromeClient = null
+            (view.parent as? ViewGroup)?.removeView(view)
+            view.removeAllViews()
+            view.destroy()
+        } catch (t: Throwable) {
+            Log.w("AICL_WEBVIEW", "safeDestroyWebView failed", t)
         }
     }
 }
@@ -130,7 +214,19 @@ private fun openInSystemBrowser(context: Context, url: String) {
         }
         context.startActivity(intent)
     } catch (t: Throwable) {
-        Log.e("AICL_X5", "Failed to open system browser for $url", t)
+        Log.e("AICL_WEBVIEW", "Failed to open system browser for $url", t)
+    }
+}
+
+private fun openWebViewInPlayStore(context: Context) {
+    try {
+        val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse(PLAY_STORE_WEBVIEW_MARKET_URI)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(marketIntent)
+    } catch (t: Throwable) {
+        Log.w("AICL_WEBVIEW", "Play Store market:// intent failed, falling back to HTTPS", t)
+        openInSystemBrowser(context, PLAY_STORE_WEBVIEW_HTTPS_URL)
     }
 }
 
@@ -150,7 +246,7 @@ private fun streamDownloadToPartFile(
     val destFile = File(task.destFilePath)
     val partFile = File(destFile.parentFile, "${destFile.name}.part")
     val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
-        Log.e("AICL_X5", "Uncaught coroutine error in WebView download stream", throwable)
+        Log.e("AICL_WEBVIEW", "Uncaught coroutine error in WebView download stream", throwable)
         runCatching { partFile.delete() }
         mainHandler.post { onFailed(throwable.message ?: "WebView 下载失败") }
     }
@@ -208,7 +304,7 @@ private fun streamDownloadToPartFile(
                 conn.disconnect()
             }
         } catch (t: Throwable) {
-            Log.e("AICL_X5", "WebView download stream failed", t)
+            Log.e("AICL_WEBVIEW", "WebView download stream failed", t)
             runCatching { partFile.delete() }
             mainHandler.post { onFailed(t.message ?: "WebView 下载失败") }
         }
@@ -216,27 +312,35 @@ private fun streamDownloadToPartFile(
 }
 
 @Composable
-private fun X5FallbackBanner(onOpenBrowser: () -> Unit) {
+private fun LowWebViewVersionBanner(
+    versionInfo: WebViewVersionInfo,
+    onUpdatePlayStore: () -> Unit,
+    onOpenBrowser: () -> Unit
+) {
+    val versionLabel = versionInfo.versionName?.let { "（当前版本：$it）" } ?: "（版本未知）"
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         shape = MaterialTheme.shapes.small,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                text = "X5 内核加载失败，已切换至系统渲染",
+                text = "当前系统 WebView 版本过低$versionLabel，可能导致官方下载页灰屏，建议前往 Google Play 商店更新至新版。",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFFD32F2F),
-                modifier = Modifier.weight(1f)
+                color = MaterialTheme.colorScheme.onErrorContainer
             )
-            TextButton(onClick = onOpenBrowser) {
-                Text(text = "去系统浏览器打开")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onUpdatePlayStore) {
+                    Text(text = "去 Play 商店更新")
+                }
+                TextButton(onClick = onOpenBrowser) {
+                    Text(text = "外部浏览器打开下载页")
+                }
             }
         }
     }
@@ -250,43 +354,65 @@ fun ShortCodeCaptureDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val x5Status by X5EngineState.status.collectAsState()
-    var readyToInstantiate by remember { mutableStateOf(x5Status != X5InitStatus.PENDING) }
-    var timedOutWaitingForX5 by remember { mutableStateOf(false) }
-    var x5RuntimeFailed by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val versionInfo = remember { detectSystemWebViewVersion(context) }
+    val isLowWebView = versionInfo.majorVersion == null || versionInfo.majorVersion < MIN_RECOMMENDED_WEBVIEW_MAJOR
+
     var statusText by remember { mutableStateOf("正在加载官方下载页（请完成年龄确认）...") }
     var isLoading by remember { mutableStateOf(true) }
     var pageFinished by remember { mutableStateOf(false) }
     var retryKey by remember { mutableStateOf(0) }
     var loadErrorMessage by remember { mutableStateOf<String?>(null) }
+    var clipboardCandidate by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var dismissedClipboardCode by remember { mutableStateOf<String?>(null) }
     val completed = remember { AtomicBoolean(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
-    val x5WebViewHolder = remember { WebViewHolder<WebView>() }
-    val sysWebViewHolder = remember { WebViewHolder<SystemWebView>() }
+    val webViewHolder = remember { WebViewHolder<WebView>() }
 
-    LaunchedEffect(x5Status) {
-        if (x5Status != X5InitStatus.PENDING) {
-            readyToInstantiate = true
-        } else {
-            delay(X5_WAIT_TIMEOUT_MS)
-            if (x5Status == X5InitStatus.PENDING) {
-                timedOutWaitingForX5 = true
-                Log.w("AICL_X5", "X5 init wait timed out, falling back to system WebView")
+    val tryCapture: (String) -> Boolean = { url ->
+        val parsed = GameSourceResolver.parseShortLinkUrl(url)
+        if (parsed != null) {
+            if (completed.compareAndSet(false, true)) {
+                runCatching {
+                    Log.i("AICL_PIPELINE", "phase=SHORTCODE_CAPTURED shortCode=${parsed.first}")
+                }
+                mainHandler.post { onCaptured(parsed.first, parsed.second) }
             }
-            readyToInstantiate = true
+            true
+        } else {
+            false
         }
     }
 
-    val useX5 = readyToInstantiate && x5Status == X5InitStatus.READY_X5 && !x5RuntimeFailed && !timedOutWaitingForX5
-
-    LaunchedEffect(readyToInstantiate, useX5, retryKey) {
-        if (!readyToInstantiate) return@LaunchedEffect
+    LaunchedEffect(retryKey) {
         delay(PAGE_LOAD_TIMEOUT_MS)
         if (!pageFinished && !completed.get() && loadErrorMessage == null) {
             isLoading = false
             loadErrorMessage = "加载失败"
             statusText = "页面加载超时（15s），请重试或去系统浏览器打开"
-            Log.w("AICL_X5", "ShortCodeCaptureDialog page load timed out after 15s (useX5=$useX5)")
+            Log.w("AICL_WEBVIEW", "ShortCodeCaptureDialog page load timed out after 15s (ver=${versionInfo.versionName})")
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && !completed.get()) {
+                try {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    val clipText = cm?.primaryClip?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)?.coerceToText(context)?.toString()
+                    val parsed = extractClipboardShortCode(clipText)
+                    if (parsed != null && parsed.first != dismissedClipboardCode) {
+                        clipboardCandidate = parsed
+                    }
+                } catch (t: Throwable) {
+                    Log.w("AICL_WEBVIEW", "Failed reading clipboard on resume", t)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -294,17 +420,34 @@ fun ShortCodeCaptureDialog(
         val timeoutRunnable = Runnable {
             if (completed.compareAndSet(false, true)) {
                 isLoading = false
-                statusText = "捕获超时（20s），请改用手动填入短码"
+                statusText = "捕获超时，请改用手动填入短码"
             }
         }
         mainHandler.postDelayed(timeoutRunnable, GameSourceResolver.WEBVIEW_TIMEOUT_MS)
         onDispose {
             mainHandler.removeCallbacksAndMessages(null)
-            safeDestroyWebView(x5WebViewHolder.ref)
-            safeDestroyWebView(sysWebViewHolder.ref)
-            x5WebViewHolder.ref = null
-            sysWebViewHolder.ref = null
+            safeDestroyWebView(webViewHolder.ref)
+            webViewHolder.ref = null
         }
+    }
+
+    fun scheduleDomPoll(view: WebView?, attempt: Int) {
+        if (attempt >= DOM_POLL_MAX_ATTEMPTS || completed.get() || view == null) return
+        mainHandler.postDelayed({
+            if (completed.get() || webViewHolder.ref !== view) return@postDelayed
+            try {
+                view.evaluateJavascript(SMART_CAPTURE_AND_AGREE_JS) { raw ->
+                    val cleaned = raw?.trim()?.trim('"')?.replace("\\/", "/") ?: ""
+                    if (cleaned.contains("vanilla.shiro.dev/f/")) {
+                        tryCapture(cleaned)
+                    } else if (!completed.get()) {
+                        scheduleDomPoll(view, attempt + 1)
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w("AICL_WEBVIEW", "DOM poll evaluateJavascript failed", t)
+            }
+        }, DOM_POLL_INTERVAL_MS)
     }
 
     AlertDialog(
@@ -317,10 +460,50 @@ fun ShortCodeCaptureDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (readyToInstantiate && !useX5) {
-                    X5FallbackBanner(
+                if (isLowWebView) {
+                    LowWebViewVersionBanner(
+                        versionInfo = versionInfo,
+                        onUpdatePlayStore = { openWebViewInPlayStore(context) },
                         onOpenBrowser = { openInSystemBrowser(context, GameSourceResolver.OFFICIAL_WIN_URL) }
                     )
+                }
+                clipboardCandidate?.let { candidate ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "检测到剪贴板短码：${candidate.first}",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    if (completed.compareAndSet(false, true)) {
+                                        onCaptured(candidate.first, candidate.second)
+                                    }
+                                }
+                            ) {
+                                Text(text = "填入")
+                            }
+                            TextButton(
+                                onClick = {
+                                    dismissedClipboardCode = candidate.first
+                                    clipboardCandidate = null
+                                }
+                            ) {
+                                Text(text = "忽略")
+                            }
+                        }
+                    }
                 }
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Box(
@@ -328,247 +511,103 @@ fun ShortCodeCaptureDialog(
                         .fillMaxWidth()
                         .height(340.dp)
                 ) {
-                    val tryCapture: (String) -> Boolean = { url ->
-                        val parsed = GameSourceResolver.parseShortLinkUrl(url)
-                        if (parsed != null) {
-                            if (completed.compareAndSet(false, true)) {
-                                runCatching {
-                                    Log.i("AICL_PIPELINE", "phase=SHORTCODE_CAPTURED shortCode=${parsed.first}")
+                    key(retryKey) {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                try {
+                                    WebView(ctx).apply {
+                                        layoutParams = ViewGroup.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                        )
+                                        runCatching { CookieManager.getInstance().setAcceptCookie(true) }
+                                        settings.javaScriptEnabled = true
+                                        settings.domStorageEnabled = true
+                                        settings.userAgentString = CAPTURE_CHROME_UA
+                                        webViewClient = object : WebViewClient() {
+                                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                                super.onPageStarted(view, url, favicon)
+                                                mainHandler.post {
+                                                    isLoading = true
+                                                    pageFinished = false
+                                                    loadErrorMessage = null
+                                                }
+                                            }
+
+                                            override fun shouldOverrideUrlLoading(
+                                                view: WebView?,
+                                                request: WebResourceRequest?
+                                            ): Boolean {
+                                                val u = request?.url?.toString().orEmpty()
+                                                if (tryCapture(u)) return true
+                                                val host = request?.url?.host?.lowercase().orEmpty()
+                                                return host.isNotEmpty() && host !in GameSourceResolver.ALLOWED_OFFICIAL_HOSTS
+                                            }
+
+                                            override fun shouldInterceptRequest(
+                                                view: WebView?,
+                                                request: WebResourceRequest?
+                                            ): WebResourceResponse? {
+                                                val u = request?.url?.toString().orEmpty()
+                                                if (tryCapture(u)) {
+                                                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                                                }
+                                                return super.shouldInterceptRequest(view, request)
+                                            }
+
+                                            override fun onReceivedError(
+                                                view: WebView?,
+                                                request: WebResourceRequest?,
+                                                error: WebResourceError?
+                                            ) {
+                                                super.onReceivedError(view, request, error)
+                                                if (request?.isForMainFrame == true) {
+                                                    mainHandler.post {
+                                                        isLoading = false
+                                                        loadErrorMessage = "加载失败，请检查网络"
+                                                        statusText = "加载失败，请检查网络"
+                                                    }
+                                                }
+                                            }
+
+                                            override fun onPageFinished(view: WebView?, url: String?) {
+                                                super.onPageFinished(view, url)
+                                                if (!url.isNullOrBlank()) {
+                                                    tryCapture(url)
+                                                }
+                                                mainHandler.post {
+                                                    pageFinished = true
+                                                    isLoading = false
+                                                }
+                                                scheduleDomPoll(view, 0)
+                                            }
+                                        }
+                                        setDownloadListener { dlUrl, _, _, _, _ ->
+                                            if (!dlUrl.isNullOrBlank()) {
+                                                tryCapture(dlUrl)
+                                            }
+                                        }
+                                        webViewHolder.ref = this
+                                        loadUrl(GameSourceResolver.OFFICIAL_WIN_URL)
+                                    }
+                                } catch (t: Throwable) {
+                                    Log.e("AICL_WEBVIEW", "System WebView instantiation failed", t)
+                                    mainHandler.post {
+                                        isLoading = false
+                                        loadErrorMessage = "加载失败，请检查网络"
+                                    }
+                                    View(ctx)
                                 }
-                                mainHandler.post { onCaptured(parsed.first, parsed.second) }
+                            },
+                            onRelease = { released ->
+                                if (webViewHolder.ref === released) webViewHolder.ref = null
+                                safeDestroyWebView(released)
                             }
-                            true
-                        } else {
-                            false
-                        }
+                        )
                     }
 
-                    if (!readyToInstantiate) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.55f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                CircularProgressIndicator(color = Color.White)
-                                Text(
-                                    text = "正在初始化浏览器内核...",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    } else {
-                        key(useX5, retryKey) {
-                            if (useX5) {
-                                AndroidView(
-                                    modifier = Modifier.fillMaxSize(),
-                                    factory = { ctx ->
-                                        try {
-                                            WebView(ctx).apply {
-                                                layoutParams = ViewGroup.LayoutParams(
-                                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                                )
-                                                runCatching { CookieManager.getInstance().setAcceptCookie(true) }
-                                                settings.javaScriptEnabled = true
-                                                settings.domStorageEnabled = true
-                                                settings.userAgentString = CAPTURE_CHROME_UA
-                                                webViewClient = object : WebViewClient() {
-                                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                                        super.onPageStarted(view, url, favicon)
-                                                        mainHandler.post {
-                                                            isLoading = true
-                                                            pageFinished = false
-                                                            loadErrorMessage = null
-                                                        }
-                                                    }
-
-                                                    override fun shouldOverrideUrlLoading(
-                                                        view: WebView?,
-                                                        request: WebResourceRequest?
-                                                    ): Boolean {
-                                                        val u = request?.url?.toString().orEmpty()
-                                                        if (tryCapture(u)) return true
-                                                        val host = request?.url?.host?.lowercase().orEmpty()
-                                                        return host.isNotEmpty() && host !in GameSourceResolver.ALLOWED_OFFICIAL_HOSTS
-                                                    }
-
-                                                    @Deprecated("Deprecated in Java")
-                                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                                        val u = url.orEmpty()
-                                                        if (tryCapture(u)) return true
-                                                        val host = runCatching { Uri.parse(u).host?.lowercase().orEmpty() }.getOrDefault("")
-                                                        return host.isNotEmpty() && host !in GameSourceResolver.ALLOWED_OFFICIAL_HOSTS
-                                                    }
-
-                                                    override fun shouldInterceptRequest(
-                                                        view: WebView?,
-                                                        request: WebResourceRequest?
-                                                    ): WebResourceResponse? {
-                                                        val u = request?.url?.toString().orEmpty()
-                                                        if (tryCapture(u)) {
-                                                            return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                                                        }
-                                                        return super.shouldInterceptRequest(view, request)
-                                                    }
-
-                                                    override fun onReceivedError(
-                                                        view: WebView?,
-                                                        request: WebResourceRequest?,
-                                                        error: WebResourceError?
-                                                    ) {
-                                                        super.onReceivedError(view, request, error)
-                                                        if (request?.isForMainFrame == true) {
-                                                            mainHandler.post {
-                                                                isLoading = false
-                                                                loadErrorMessage = "加载失败，请检查网络"
-                                                                statusText = "加载失败，请检查网络"
-                                                            }
-                                                        }
-                                                    }
-
-                                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                                        super.onPageFinished(view, url)
-                                                        mainHandler.post {
-                                                            pageFinished = true
-                                                            isLoading = false
-                                                        }
-                                                        listOf(800L, 2_000L, 4_000L).forEach { delayMs ->
-                                                            mainHandler.postDelayed({
-                                                                if (!completed.get()) {
-                                                                    runCatching { view?.evaluateJavascript(AUTO_AGREE_JS, null) }
-                                                                }
-                                                            }, delayMs)
-                                                        }
-                                                    }
-                                                }
-                                                setDownloadListener { dlUrl, _, _, _, _ ->
-                                                    if (!dlUrl.isNullOrBlank()) {
-                                                        tryCapture(dlUrl)
-                                                    }
-                                                }
-                                                x5WebViewHolder.ref = this
-                                                loadUrl(GameSourceResolver.OFFICIAL_WIN_URL)
-                                            }
-                                        } catch (t: Throwable) {
-                                            Log.e("AICL_X5", "X5 WebView instantiation crashed, falling back to system WebView", t)
-                                            X5EngineState.markRuntimeFallback()
-                                            mainHandler.post { x5RuntimeFailed = true }
-                                            android.view.View(ctx)
-                                        }
-                                    },
-                                    onRelease = { released ->
-                                        if (x5WebViewHolder.ref === released) x5WebViewHolder.ref = null
-                                        safeDestroyWebView(released)
-                                    }
-                                )
-                            } else {
-                                AndroidView(
-                                    modifier = Modifier.fillMaxSize(),
-                                    factory = { ctx ->
-                                        try {
-                                            SystemWebView(ctx).apply {
-                                                layoutParams = ViewGroup.LayoutParams(
-                                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                                )
-                                                runCatching { SystemCookieManager.getInstance().setAcceptCookie(true) }
-                                                settings.javaScriptEnabled = true
-                                                settings.domStorageEnabled = true
-                                                settings.userAgentString = CAPTURE_CHROME_UA
-                                                webViewClient = object : SystemWebViewClient() {
-                                                    override fun onPageStarted(view: SystemWebView?, url: String?, favicon: Bitmap?) {
-                                                        super.onPageStarted(view, url, favicon)
-                                                        mainHandler.post {
-                                                            isLoading = true
-                                                            pageFinished = false
-                                                            loadErrorMessage = null
-                                                        }
-                                                    }
-
-                                                    override fun shouldOverrideUrlLoading(
-                                                        view: SystemWebView?,
-                                                        request: SystemWebResourceRequest?
-                                                    ): Boolean {
-                                                        val u = request?.url?.toString().orEmpty()
-                                                        if (tryCapture(u)) return true
-                                                        val host = request?.url?.host?.lowercase().orEmpty()
-                                                        return host.isNotEmpty() && host !in GameSourceResolver.ALLOWED_OFFICIAL_HOSTS
-                                                    }
-
-                                                    override fun shouldInterceptRequest(
-                                                        view: SystemWebView?,
-                                                        request: SystemWebResourceRequest?
-                                                    ): SystemWebResourceResponse? {
-                                                        val u = request?.url?.toString().orEmpty()
-                                                        if (tryCapture(u)) {
-                                                            return SystemWebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                                                        }
-                                                        return super.shouldInterceptRequest(view, request)
-                                                    }
-
-                                                    override fun onReceivedError(
-                                                        view: SystemWebView?,
-                                                        request: SystemWebResourceRequest?,
-                                                        error: SystemWebResourceError?
-                                                    ) {
-                                                        super.onReceivedError(view, request, error)
-                                                        if (request?.isForMainFrame == true) {
-                                                            mainHandler.post {
-                                                                isLoading = false
-                                                                loadErrorMessage = "加载失败，请检查网络"
-                                                                statusText = "加载失败，请检查网络"
-                                                            }
-                                                        }
-                                                    }
-
-                                                    override fun onPageFinished(view: SystemWebView?, url: String?) {
-                                                        super.onPageFinished(view, url)
-                                                        mainHandler.post {
-                                                            pageFinished = true
-                                                            isLoading = false
-                                                        }
-                                                        listOf(800L, 2_000L, 4_000L).forEach { delayMs ->
-                                                            mainHandler.postDelayed({
-                                                                if (!completed.get()) {
-                                                                    runCatching { view?.evaluateJavascript(AUTO_AGREE_JS, null) }
-                                                                }
-                                                            }, delayMs)
-                                                        }
-                                                    }
-                                                }
-                                                setDownloadListener { dlUrl, _, _, _, _ ->
-                                                    if (!dlUrl.isNullOrBlank()) {
-                                                        tryCapture(dlUrl)
-                                                    }
-                                                }
-                                                sysWebViewHolder.ref = this
-                                                loadUrl(GameSourceResolver.OFFICIAL_WIN_URL)
-                                            }
-                                        } catch (t: Throwable) {
-                                            Log.e("AICL_X5", "System WebView instantiation failed", t)
-                                            mainHandler.post {
-                                                isLoading = false
-                                                loadErrorMessage = "加载失败，请检查网络"
-                                            }
-                                            android.view.View(ctx)
-                                        }
-                                    },
-                                    onRelease = { released ->
-                                        if (sysWebViewHolder.ref === released) sysWebViewHolder.ref = null
-                                        safeDestroyWebView(released)
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    if (readyToInstantiate && isLoading && loadErrorMessage == null) {
+                    if (isLoading && loadErrorMessage == null) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -655,10 +694,9 @@ fun WebViewDownloadDialog(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
-    val x5Status by X5EngineState.status.collectAsState()
-    var readyToInstantiate by remember { mutableStateOf(x5Status != X5InitStatus.PENDING) }
-    var timedOutWaitingForX5 by remember { mutableStateOf(false) }
-    var x5RuntimeFailed by remember { mutableStateOf(false) }
+    val versionInfo = remember { detectSystemWebViewVersion(context) }
+    val isLowWebView = versionInfo.majorVersion == null || versionInfo.majorVersion < MIN_RECOMMENDED_WEBVIEW_MAJOR
+
     var statusText by remember { mutableStateOf("正在通过应用内浏览器接管下载（fp=${task.urlFp}）...") }
     var progressPercent by remember { mutableStateOf(0) }
     var isLoading by remember { mutableStateOf(true) }
@@ -668,32 +706,15 @@ fun WebViewDownloadDialog(
     val startedDownload = remember { AtomicBoolean(false) }
     val cancelled = remember { AtomicBoolean(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
-    val x5WebViewHolder = remember { WebViewHolder<WebView>() }
-    val sysWebViewHolder = remember { WebViewHolder<SystemWebView>() }
+    val webViewHolder = remember { WebViewHolder<WebView>() }
 
-    LaunchedEffect(x5Status) {
-        if (x5Status != X5InitStatus.PENDING) {
-            readyToInstantiate = true
-        } else {
-            delay(X5_WAIT_TIMEOUT_MS)
-            if (x5Status == X5InitStatus.PENDING) {
-                timedOutWaitingForX5 = true
-                Log.w("AICL_X5", "X5 init wait timed out in download dialog, falling back to system WebView")
-            }
-            readyToInstantiate = true
-        }
-    }
-
-    val useX5 = readyToInstantiate && x5Status == X5InitStatus.READY_X5 && !x5RuntimeFailed && !timedOutWaitingForX5
-
-    LaunchedEffect(readyToInstantiate, useX5, retryKey) {
-        if (!readyToInstantiate) return@LaunchedEffect
+    LaunchedEffect(retryKey) {
         delay(PAGE_LOAD_TIMEOUT_MS)
         if (!pageFinished && !startedDownload.get() && loadErrorMessage == null) {
             isLoading = false
             loadErrorMessage = "加载失败"
             statusText = "页面加载超时（15s），请重试或去系统浏览器打开"
-            Log.w("AICL_X5", "WebViewDownloadDialog page load timed out after 15s (useX5=$useX5)")
+            Log.w("AICL_WEBVIEW", "WebViewDownloadDialog page load timed out after 15s (ver=${versionInfo.versionName})")
         }
     }
 
@@ -704,10 +725,8 @@ fun WebViewDownloadDialog(
         onDispose {
             cancelled.set(true)
             mainHandler.removeCallbacksAndMessages(null)
-            safeDestroyWebView(x5WebViewHolder.ref)
-            safeDestroyWebView(sysWebViewHolder.ref)
-            x5WebViewHolder.ref = null
-            sysWebViewHolder.ref = null
+            safeDestroyWebView(webViewHolder.ref)
+            webViewHolder.ref = null
         }
     }
 
@@ -721,8 +740,10 @@ fun WebViewDownloadDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (readyToInstantiate && !useX5) {
-                    X5FallbackBanner(
+                if (isLowWebView) {
+                    LowWebViewVersionBanner(
+                        versionInfo = versionInfo,
+                        onUpdatePlayStore = { openWebViewInPlayStore(context) },
                         onOpenBrowser = { openInSystemBrowser(context, task.signedUrl) }
                     )
                 }
@@ -735,213 +756,101 @@ fun WebViewDownloadDialog(
                         .fillMaxWidth()
                         .height(180.dp)
                 ) {
-                    if (!readyToInstantiate) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.55f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                CircularProgressIndicator(color = Color.White)
-                                Text(
-                                    text = "正在初始化浏览器内核...",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    } else {
-                        key(useX5, retryKey) {
-                            if (useX5) {
-                                AndroidView(
-                                    modifier = Modifier.fillMaxSize(),
-                                    factory = { ctx ->
-                                        try {
-                                            WebView(ctx).apply {
-                                                layoutParams = ViewGroup.LayoutParams(
-                                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                                )
-                                                runCatching {
-                                                    CookieManager.getInstance().setAcceptCookie(true)
-                                                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                                                }
-                                                settings.javaScriptEnabled = true
-                                                settings.domStorageEnabled = true
-                                                settings.userAgentString = CAPTURE_CHROME_UA
-                                                webViewClient = object : WebViewClient() {
-                                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                                        super.onPageStarted(view, url, favicon)
-                                                        mainHandler.post {
-                                                            isLoading = true
-                                                            pageFinished = false
-                                                            loadErrorMessage = null
-                                                        }
-                                                    }
-
-                                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                                        super.onPageFinished(view, url)
-                                                        mainHandler.post {
-                                                            pageFinished = true
-                                                            isLoading = false
-                                                        }
-                                                    }
-
-                                                    override fun onReceivedError(
-                                                        view: WebView?,
-                                                        request: WebResourceRequest?,
-                                                        error: WebResourceError?
-                                                    ) {
-                                                        super.onReceivedError(view, request, error)
-                                                        if (request?.isForMainFrame == true) {
-                                                            mainHandler.post {
-                                                                isLoading = false
-                                                                loadErrorMessage = "加载失败，请检查网络"
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                setDownloadListener { dlUrl, userAgent, _, _, contentLength ->
-                                                    if (!startedDownload.compareAndSet(false, true)) return@setDownloadListener
-                                                    val targetUrl = dlUrl?.takeIf { it.isNotBlank() } ?: task.signedUrl
-                                                    val cookies = runCatching {
-                                                        CookieManager.getInstance().getCookie(targetUrl).orEmpty()
-                                                    }.getOrDefault("")
-                                                    val ua = userAgent?.takeIf { it.isNotBlank() } ?: CAPTURE_CHROME_UA
-                                                    mainHandler.post {
-                                                        isLoading = false
-                                                        statusText = "已接管下载流，正在写入缓存..."
-                                                    }
-                                                    streamDownloadToPartFile(
-                                                        targetUrl = targetUrl,
-                                                        cookies = cookies,
-                                                        ua = ua,
-                                                        contentLength = contentLength,
-                                                        task = task,
-                                                        cancelled = cancelled,
-                                                        mainHandler = mainHandler,
-                                                        onProgress = onProgress,
-                                                        onProgressPercent = { progressPercent = it },
-                                                        onPartFileReady = onPartFileReady,
-                                                        onFailed = onFailed
-                                                    )
-                                                }
-                                                x5WebViewHolder.ref = this
-                                                loadUrl(task.signedUrl)
-                                            }
-                                        } catch (t: Throwable) {
-                                            Log.e("AICL_X5", "X5 WebView download instantiation crashed, falling back to system WebView", t)
-                                            X5EngineState.markRuntimeFallback()
-                                            mainHandler.post { x5RuntimeFailed = true }
-                                            android.view.View(ctx)
+                    key(retryKey) {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                try {
+                                    WebView(ctx).apply {
+                                        layoutParams = ViewGroup.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                        )
+                                        runCatching {
+                                            CookieManager.getInstance().setAcceptCookie(true)
+                                            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                                         }
-                                    },
-                                    onRelease = { released ->
-                                        if (x5WebViewHolder.ref === released) x5WebViewHolder.ref = null
-                                        safeDestroyWebView(released)
-                                    }
-                                )
-                            } else {
-                                AndroidView(
-                                    modifier = Modifier.fillMaxSize(),
-                                    factory = { ctx ->
-                                        try {
-                                            SystemWebView(ctx).apply {
-                                                layoutParams = ViewGroup.LayoutParams(
-                                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                                )
-                                                runCatching {
-                                                    SystemCookieManager.getInstance().setAcceptCookie(true)
-                                                    SystemCookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                                        settings.javaScriptEnabled = true
+                                        settings.domStorageEnabled = true
+                                        settings.userAgentString = CAPTURE_CHROME_UA
+                                        webViewClient = object : WebViewClient() {
+                                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                                super.onPageStarted(view, url, favicon)
+                                                mainHandler.post {
+                                                    isLoading = true
+                                                    pageFinished = false
+                                                    loadErrorMessage = null
                                                 }
-                                                settings.javaScriptEnabled = true
-                                                settings.domStorageEnabled = true
-                                                settings.userAgentString = CAPTURE_CHROME_UA
-                                                webViewClient = object : SystemWebViewClient() {
-                                                    override fun onPageStarted(view: SystemWebView?, url: String?, favicon: Bitmap?) {
-                                                        super.onPageStarted(view, url, favicon)
-                                                        mainHandler.post {
-                                                            isLoading = true
-                                                            pageFinished = false
-                                                            loadErrorMessage = null
-                                                        }
-                                                    }
+                                            }
 
-                                                    override fun onPageFinished(view: SystemWebView?, url: String?) {
-                                                        super.onPageFinished(view, url)
-                                                        mainHandler.post {
-                                                            pageFinished = true
-                                                            isLoading = false
-                                                        }
-                                                    }
-
-                                                    override fun onReceivedError(
-                                                        view: SystemWebView?,
-                                                        request: SystemWebResourceRequest?,
-                                                        error: SystemWebResourceError?
-                                                    ) {
-                                                        super.onReceivedError(view, request, error)
-                                                        if (request?.isForMainFrame == true) {
-                                                            mainHandler.post {
-                                                                isLoading = false
-                                                                loadErrorMessage = "加载失败，请检查网络"
-                                                            }
-                                                        }
-                                                    }
+                                            override fun onPageFinished(view: WebView?, url: String?) {
+                                                super.onPageFinished(view, url)
+                                                mainHandler.post {
+                                                    pageFinished = true
+                                                    isLoading = false
                                                 }
-                                                setDownloadListener { dlUrl, userAgent, _, _, contentLength ->
-                                                    if (!startedDownload.compareAndSet(false, true)) return@setDownloadListener
-                                                    val targetUrl = dlUrl?.takeIf { it.isNotBlank() } ?: task.signedUrl
-                                                    val cookies = runCatching {
-                                                        SystemCookieManager.getInstance().getCookie(targetUrl).orEmpty()
-                                                    }.getOrDefault("")
-                                                    val ua = userAgent?.takeIf { it.isNotBlank() } ?: CAPTURE_CHROME_UA
+                                            }
+
+                                            override fun onReceivedError(
+                                                view: WebView?,
+                                                request: WebResourceRequest?,
+                                                error: WebResourceError?
+                                            ) {
+                                                super.onReceivedError(view, request, error)
+                                                if (request?.isForMainFrame == true) {
                                                     mainHandler.post {
                                                         isLoading = false
-                                                        statusText = "已接管下载流，正在写入缓存..."
+                                                        loadErrorMessage = "加载失败，请检查网络"
                                                     }
-                                                    streamDownloadToPartFile(
-                                                        targetUrl = targetUrl,
-                                                        cookies = cookies,
-                                                        ua = ua,
-                                                        contentLength = contentLength,
-                                                        task = task,
-                                                        cancelled = cancelled,
-                                                        mainHandler = mainHandler,
-                                                        onProgress = onProgress,
-                                                        onProgressPercent = { progressPercent = it },
-                                                        onPartFileReady = onPartFileReady,
-                                                        onFailed = onFailed
-                                                    )
                                                 }
-                                                sysWebViewHolder.ref = this
-                                                loadUrl(task.signedUrl)
                                             }
-                                        } catch (t: Throwable) {
-                                            Log.e("AICL_X5", "System WebView download instantiation failed", t)
+                                        }
+                                        setDownloadListener { dlUrl, userAgent, _, _, contentLength ->
+                                            if (!startedDownload.compareAndSet(false, true)) return@setDownloadListener
+                                            val targetUrl = dlUrl?.takeIf { it.isNotBlank() } ?: task.signedUrl
+                                            val cookies = runCatching {
+                                                CookieManager.getInstance().getCookie(targetUrl).orEmpty()
+                                            }.getOrDefault("")
+                                            val ua = userAgent?.takeIf { it.isNotBlank() } ?: CAPTURE_CHROME_UA
                                             mainHandler.post {
                                                 isLoading = false
-                                                loadErrorMessage = "加载失败，请检查网络"
-                                                onWebViewUnavailable(t.message ?: "WebView 不可用")
+                                                statusText = "已接管下载流，正在写入缓存..."
                                             }
-                                            android.view.View(ctx)
+                                            streamDownloadToPartFile(
+                                                targetUrl = targetUrl,
+                                                cookies = cookies,
+                                                ua = ua,
+                                                contentLength = contentLength,
+                                                task = task,
+                                                cancelled = cancelled,
+                                                mainHandler = mainHandler,
+                                                onProgress = onProgress,
+                                                onProgressPercent = { progressPercent = it },
+                                                onPartFileReady = onPartFileReady,
+                                                onFailed = onFailed
+                                            )
                                         }
-                                    },
-                                    onRelease = { released ->
-                                        if (sysWebViewHolder.ref === released) sysWebViewHolder.ref = null
-                                        safeDestroyWebView(released)
+                                        webViewHolder.ref = this
+                                        loadUrl(task.signedUrl)
                                     }
-                                )
+                                } catch (t: Throwable) {
+                                    Log.e("AICL_WEBVIEW", "System WebView download instantiation failed", t)
+                                    mainHandler.post {
+                                        isLoading = false
+                                        loadErrorMessage = "加载失败，请检查网络"
+                                        onWebViewUnavailable(t.message ?: "WebView 不可用")
+                                    }
+                                    View(ctx)
+                                }
+                            },
+                            onRelease = { released ->
+                                if (webViewHolder.ref === released) webViewHolder.ref = null
+                                safeDestroyWebView(released)
                             }
-                        }
+                        )
                     }
 
-                    if (readyToInstantiate && isLoading && loadErrorMessage == null) {
+                    if (isLoading && loadErrorMessage == null) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
