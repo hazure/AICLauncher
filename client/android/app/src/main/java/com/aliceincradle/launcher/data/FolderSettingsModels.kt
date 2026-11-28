@@ -259,7 +259,7 @@ data class SettingsPageState(
     val logLevelOptions: List<String> = listOf("VERBOSE", "DEBUG", "INFO", "WARN", "ERROR"),
     val isDevModeUnlocked: Boolean = false,
     val forceSoftwareRendering: Boolean = false,
-    val versionName: String = "0.1.0b",
+    val versionName: String = "0.1.2g",
     val versionTapCount: Int = 0,
     val selectedPythonVersion: String = "Python 3.10",
     val pythonVersionOptions: List<String> = listOf("Python 3.10", "Python 3.11", "Python 3.12"),

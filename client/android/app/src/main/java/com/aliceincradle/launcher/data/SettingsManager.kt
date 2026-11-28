@@ -34,7 +34,7 @@ data class SettingsData(
     val logLevel: String = "INFO",
     val isDevModeUnlocked: Boolean = false,
     val forceSoftwareRendering: Boolean = false,
-    val versionName: String = "0.1.0b"
+    val versionName: String = "0.1.2g"
 )
 
 /**
@@ -113,7 +113,7 @@ class SettingsManager(
                 logLevel = props.getProperty("logLevel", "INFO"),
                 isDevModeUnlocked = props.getProperty("isDevModeUnlocked", "false").toBooleanStrictOrNull() ?: false,
                 forceSoftwareRendering = props.getProperty("forceSoftwareRendering", "false").toBooleanStrictOrNull() ?: false,
-                versionName = props.getProperty("versionName", "0.1.0a")
+                versionName = props.getProperty("versionName", "0.1.2g")
             )
         } catch (e: Exception) {
             logError("Failed to read settings datastore from ${storageFile.name}", e)
