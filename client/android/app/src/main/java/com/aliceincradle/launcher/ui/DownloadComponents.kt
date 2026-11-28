@@ -25,11 +25,15 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -60,8 +64,13 @@ fun DownloadScreen(
     onIncludeCompatibleChange: (Boolean) -> Unit,
     onIncludeFeaturedChange: (Boolean) -> Unit,
     onDownloadClick: (String) -> Unit,
+    onCancelDownload: (String) -> Unit,
+    onOpenDownloadedFile: (DownloadCatalogItem) -> Unit,
+    onOpenCienFallback: () -> Unit,
+    onRefreshCatalog: () -> Unit,
     onDetailClick: (DownloadCatalogItem) -> Unit,
     onDismissDetail: () -> Unit,
+    onOpenManualShortCode: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -82,12 +91,77 @@ fun DownloadScreen(
             onIncludeFeaturedChange = onIncludeFeaturedChange
         )
 
-        Text(
-            text = state.statsText,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.testTag("download_stats_text")
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = state.statsText,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (state.catalogError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("download_stats_text")
+            )
+            IconButton(
+                onClick = onRefreshCatalog,
+                enabled = !state.isLoadingCatalog,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "刷新列表",
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        state.catalogError?.let { errorMsg ->
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("download_mirror_error_card"),
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.errorContainer
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = errorMsg,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = onRefreshCatalog,
+                            modifier = Modifier.testTag("download_retry_catalog_button")
+                        ) {
+                            Text(text = "重试")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenCienFallback,
+                            modifier = Modifier.testTag("download_cien_fallback_button")
+                        ) {
+                            Text(text = "前往官方 ci-en 发布页")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenManualShortCode,
+                            modifier = Modifier.testTag("download_manual_shortcode_button")
+                        ) {
+                            Text(text = "手动填入短码")
+                        }
+                    }
+                }
+            }
+        }
 
         Box(
             modifier = Modifier
@@ -121,6 +195,8 @@ fun DownloadScreen(
                         DownloadCatalogRowCard(
                             item = item,
                             onDownloadClick = onDownloadClick,
+                            onCancelDownload = onCancelDownload,
+                            onOpenDownloadedFile = onOpenDownloadedFile,
                             onDetailClick = onDetailClick
                         )
                     }
@@ -280,11 +356,16 @@ private fun FilterCheckboxItem(
 private fun DownloadCatalogRowCard(
     item: DownloadCatalogItem,
     onDownloadClick: (String) -> Unit,
+    onCancelDownload: (String) -> Unit,
+    onOpenDownloadedFile: (DownloadCatalogItem) -> Unit,
     onDetailClick: (DownloadCatalogItem) -> Unit
 ) {
     val (statusIcon, statusTint, statusDesc) = when (item.status) {
         DownloadContentStatus.DOWNLOADED -> Triple(Icons.Default.Check, Color(0xFF2E7D32), "已下载")
-        DownloadContentStatus.DOWNLOADING -> Triple(Icons.Default.Download, Color(0xFF1565C0), "下载中或可下载")
+        DownloadContentStatus.AVAILABLE -> Triple(Icons.Default.Download, Color(0xFF1565C0), "可下载")
+        DownloadContentStatus.QUEUED,
+        DownloadContentStatus.DOWNLOADING -> Triple(Icons.Default.Download, Color(0xFFEF6C00), "下载中")
+        DownloadContentStatus.FAILED -> Triple(Icons.Default.ErrorOutline, Color(0xFFC62828), "下载失败")
         DownloadContentStatus.DISABLED -> Triple(Icons.Default.Block, Color(0xFF757575), "已禁用或不兼容")
     }
 
@@ -325,18 +406,70 @@ private fun DownloadCatalogRowCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (item.status == DownloadContentStatus.DOWNLOADING || item.status == DownloadContentStatus.QUEUED) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { (item.progressPercent / 100f).coerceIn(0f, 1f) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = { onCancelDownload(item.id) },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .heightIn(min = 28.dp)
+                                .testTag("download_cancel_${item.id}")
+                        ) {
+                            Text(
+                                text = "取消",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+                if (item.status == DownloadContentStatus.FAILED && !item.errorMessage.isNullOrBlank()) {
+                    Text(
+                        text = "失败：${item.errorMessage}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val canOpenDownloaded = item.status == DownloadContentStatus.DOWNLOADED && !item.localFilePath.isNullOrBlank()
+                    val actionEnabled = item.status == DownloadContentStatus.AVAILABLE ||
+                        item.status == DownloadContentStatus.FAILED ||
+                        canOpenDownloaded
+                    val actionLabel = when (item.status) {
+                        DownloadContentStatus.DOWNLOADED -> if (canOpenDownloaded) "安装/查看" else "已下载"
+                        DownloadContentStatus.QUEUED -> "排队中"
+                        DownloadContentStatus.DOWNLOADING -> "下载中 ${item.progressPercent}%"
+                        DownloadContentStatus.FAILED -> "重试"
+                        DownloadContentStatus.DISABLED -> "不可用"
+                        DownloadContentStatus.AVAILABLE -> "下载"
+                    }
                     OutlinedButton(
-                        onClick = { onDownloadClick(item.id) },
-                        enabled = item.status != DownloadContentStatus.DISABLED,
+                        onClick = {
+                            if (canOpenDownloaded) {
+                                onOpenDownloadedFile(item)
+                            } else {
+                                onDownloadClick(item.id)
+                            }
+                        },
+                        enabled = actionEnabled,
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                         modifier = Modifier.heightIn(min = 32.dp)
                     ) {
                         Text(
-                            text = if (item.status == DownloadContentStatus.DOWNLOADED) "已下载" else "下载",
+                            text = actionLabel,
                             style = MaterialTheme.typography.labelMedium,
                             maxLines = 1
                         )

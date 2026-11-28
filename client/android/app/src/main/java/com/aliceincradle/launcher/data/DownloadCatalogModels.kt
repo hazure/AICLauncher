@@ -1,8 +1,11 @@
 package com.aliceincradle.launcher.data
 
 enum class DownloadContentStatus {
-    DOWNLOADED,
+    AVAILABLE,
+    QUEUED,
     DOWNLOADING,
+    DOWNLOADED,
+    FAILED,
     DISABLED
 }
 
@@ -19,7 +22,15 @@ data class DownloadCatalogItem(
     val isCompatibleVersion: Boolean = true,
     val isFeatured: Boolean = false,
     val author: String = "官方",
-    val description: String = ""
+    val description: String = "",
+    @Deprecated("Legacy metadata only; removed from download path per T36_hotfix H4")
+    val downloadUrl: String = "",
+    val fileName: String = "",
+    val sizeBytes: Long = 0L,
+    val progressPercent: Int = 0,
+    val downloadedBytes: Long = 0L,
+    val localFilePath: String? = null,
+    val errorMessage: String? = null
 )
 
 data class DownloadFilterState(
@@ -38,114 +49,22 @@ data class DownloadFilterState(
 
 data class DownloadPageState(
     val filter: DownloadFilterState = DownloadFilterState(),
-    val statsText: String = "共 23333 个内容，耗时 0.01s",
-    val allItems: List<DownloadCatalogItem> = DownloadCatalogPreviewFactory.createDefaultItems(),
-    val items: List<DownloadCatalogItem> = allItems,
-    val selectedDetailItem: DownloadCatalogItem? = null
-)
+    val statsText: String = "正在拉取远端资源列表...",
+    val allItems: List<DownloadCatalogItem> = emptyList(),
+    val items: List<DownloadCatalogItem> = emptyList(),
+    val selectedDetailItem: DownloadCatalogItem? = null,
+    val isLoadingCatalog: Boolean = false,
+    val catalogError: String? = null,
+    val pendingCaptureItemId: String? = null
+) {
+    val activeDownloadCount: Int
+        get() = allItems.count {
+            it.status == DownloadContentStatus.QUEUED ||
+                it.status == DownloadContentStatus.DOWNLOADING
+        }
+}
 
-object DownloadCatalogPreviewFactory {
-    fun createDefaultItems(): List<DownloadCatalogItem> = listOf(
-        DownloadCatalogItem(
-            id = "aic-core-0.29d",
-            title = "Alice In Cradle · 0.29d",
-            tags = listOf("游戏本体", "官方", "稳定版"),
-            sizeLabel = "约4.9GB",
-            status = DownloadContentStatus.DOWNLOADED,
-            appName = "AIC",
-            versionChannel = "稳定版",
-            category = "游戏本体",
-            isCompatibleVersion = true,
-            isFeatured = true,
-            author = "官方",
-            description = "Alice In Cradle 稳定发行版游戏本体，已完成本地兼容性检验。"
-        ),
-        DownloadCatalogItem(
-            id = "mod-weapon-mastery",
-            title = "Weapon Mastery Enhancer",
-            tags = listOf("武器强化", "精品", "稳定版"),
-            sizeLabel = "24.6MB",
-            status = DownloadContentStatus.DOWNLOADING,
-            appName = "AIC",
-            versionChannel = "稳定版",
-            category = "武器强化",
-            isCompatibleVersion = true,
-            isFeatured = true,
-            author = "KaguyaLab",
-            description = "扩展近战与法杖连段判定并附加蓄力特效，正在排队下载中。"
-        ),
-        DownloadCatalogItem(
-            id = "mod-legacy-relic",
-            title = "Legacy Relic Pack · 0.24",
-            tags = listOf("武器强化", "不兼容", "旧版"),
-            sizeLabel = "118MB",
-            status = DownloadContentStatus.DISABLED,
-            appName = "AIC",
-            versionChannel = "稳定版",
-            category = "武器强化",
-            isCompatibleVersion = false,
-            isFeatured = false,
-            author = "ArchiveTeam",
-            description = "依赖旧版 Harmony 接口签名，与当前 0.29d/0.3.0 运行时不兼容。"
-        ),
-        DownloadCatalogItem(
-            id = "mod-crimson-blade",
-            title = "Crimson Blade Rebalance",
-            tags = listOf("武器强化", "社区", "稳定版"),
-            sizeLabel = "12.8MB",
-            status = DownloadContentStatus.DOWNLOADING,
-            appName = "AIC",
-            versionChannel = "稳定版",
-            category = "武器强化",
-            isCompatibleVersion = true,
-            isFeatured = false,
-            author = "NoelWorkshop",
-            description = "微调武器耐力消耗曲线与反击窗口时间。"
-        ),
-        DownloadCatalogItem(
-            id = "mod-hud-tweaks",
-            title = "Quick Slot HUD Tweaks",
-            tags = listOf("UI 优化", "精品", "稳定版"),
-            sizeLabel = "4.2MB",
-            status = DownloadContentStatus.DOWNLOADED,
-            appName = "AIC",
-            versionChannel = "稳定版",
-            category = "UI 优化",
-            isCompatibleVersion = true,
-            isFeatured = true,
-            author = "UiCraft",
-            description = "触屏快捷栏重排与自适应缩放补丁。"
-        ),
-        DownloadCatalogItem(
-            id = "aic-core-0.30-rc2",
-            title = "Alice In Cradle · 0.30-rc2",
-            tags = listOf("游戏本体", "官方", "测试版"),
-            sizeLabel = "约5.1GB",
-            status = DownloadContentStatus.DOWNLOADING,
-            appName = "AIC",
-            versionChannel = "测试版",
-            category = "游戏本体",
-            isCompatibleVersion = true,
-            isFeatured = true,
-            author = "官方",
-            description = "预览测试分支游戏本体包，支持最新渲染管线。"
-        ),
-        DownloadCatalogItem(
-            id = "mod-old-shader",
-            title = "Old Shader Loader · 0.22",
-            tags = listOf("UI 优化", "已禁用", "旧版"),
-            sizeLabel = "8.5MB",
-            status = DownloadContentStatus.DISABLED,
-            appName = "AIC 扩展",
-            versionChannel = "测试版",
-            category = "UI 优化",
-            isCompatibleVersion = false,
-            isFeatured = false,
-            author = "LegacyDev",
-            description = "存在桌面 OpenGL 着色器硬编码，移动沙盒环境下已禁用。"
-        )
-    )
-
+object DownloadCatalogFilter {
     fun filterItems(
         allItems: List<DownloadCatalogItem>,
         filter: DownloadFilterState

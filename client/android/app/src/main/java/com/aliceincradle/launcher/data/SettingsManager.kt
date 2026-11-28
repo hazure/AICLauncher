@@ -33,8 +33,7 @@ data class SettingsData(
     val selectedPythonDir: String = "D:/python",
     val logLevel: String = "INFO",
     val isDevModeUnlocked: Boolean = false,
-    val forceSoftwareRendering: Boolean = false,
-    val versionName: String = "0.1.0a"
+    val forceSoftwareRendering: Boolean = false
 )
 
 /**
@@ -112,8 +111,7 @@ class SettingsManager(
                 selectedPythonDir = props.getProperty("selectedPythonDir", "D:/python"),
                 logLevel = props.getProperty("logLevel", "INFO"),
                 isDevModeUnlocked = props.getProperty("isDevModeUnlocked", "false").toBooleanStrictOrNull() ?: false,
-                forceSoftwareRendering = props.getProperty("forceSoftwareRendering", "false").toBooleanStrictOrNull() ?: false,
-                versionName = props.getProperty("versionName", "0.1.0a")
+                forceSoftwareRendering = props.getProperty("forceSoftwareRendering", "false").toBooleanStrictOrNull() ?: false
             )
         } catch (e: Exception) {
             logError("Failed to read settings datastore from ${storageFile.name}", e)
@@ -144,7 +142,6 @@ class SettingsManager(
                     setProperty("logLevel", data.logLevel)
                     setProperty("isDevModeUnlocked", data.isDevModeUnlocked.toString())
                     setProperty("forceSoftwareRendering", data.forceSoftwareRendering.toString())
-                    setProperty("versionName", data.versionName)
                 }
                 val writer = StringWriter()
                 props.store(writer, "AICL Settings DataStore")

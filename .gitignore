@@ -19,3 +19,9 @@ out/
 
 # Keystores
 *.keystore
+
+# Internal rules (untracked)
+PROJECT_RULES.md
+
+# Test download artifacts
+client/android/app/downloads/

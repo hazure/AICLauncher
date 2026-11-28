@@ -1,0 +1,18 @@
+{
+  "manifest_version": 2,
+  "name": "AICL SVG Intrinsic Size Compat",
+  "version": "1.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "aicl-svg-fix@aliceincradle.launcher"
+    }
+  },
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "https://get.aliceincradle.dev/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  }
+}
