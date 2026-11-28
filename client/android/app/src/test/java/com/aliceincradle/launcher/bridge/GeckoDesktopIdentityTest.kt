@@ -2,25 +2,29 @@ package com.aliceincradle.launcher.bridge
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GeckoDesktopIdentityTest {
     @Test
-    fun buildDesktopFirefoxUserAgent_isSelfConsistentDesktopFirefox() {
-        val ua = GeckoDesktopIdentity.buildDesktopFirefoxUserAgent()
-        assertTrue(GeckoDesktopIdentity.isValidDesktopFirefoxUa(ua))
-        assertTrue(ua.contains("Firefox/133.0"))
-        assertTrue(ua.contains("Windows NT 10.0; Win64; x64"))
-        assertFalse(ua.contains("Chrome", ignoreCase = true))
-        assertFalse(ua.contains("Android", ignoreCase = true))
-        assertFalse(ua.contains("Mobile", ignoreCase = true))
-    }
-
-    @Test
-    fun isValidDesktopFirefoxUa_rejectsChromeOrMobileUas() {
-        assertFalse(GeckoDesktopIdentity.isValidDesktopFirefoxUa("Mozilla/5.0 (Linux; Android 14) Gecko/20100101 Firefox/133.0"))
-        assertFalse(GeckoDesktopIdentity.isValidDesktopFirefoxUa("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36"))
+    fun nativeFirefoxAndroidIdentity_usesNoOverride_andRejectsDesktopOrChrome() {
+        assertNull(GeckoDesktopIdentity.USE_NATIVE_USER_AGENT_OVERRIDE)
+        assertTrue(
+            GeckoDesktopIdentity.isValidNativeFirefoxAndroidUa(
+                "Mozilla/5.0 (Android 13; Mobile; rv:133.0) Gecko/133.0 Firefox/133.0"
+            )
+        )
+        assertFalse(
+            GeckoDesktopIdentity.isValidNativeFirefoxAndroidUa(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
+            )
+        )
+        assertFalse(
+            GeckoDesktopIdentity.isValidNativeFirefoxAndroidUa(
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+            )
+        )
     }
 
     @Test

@@ -5,6 +5,15 @@ import java.net.URLDecoder
 
 object GeckoDesktopIdentity {
     const val GECKO_MAJOR_VERSION = 133
+    val USE_NATIVE_USER_AGENT_OVERRIDE: String? = null
+
+    private val FORBIDDEN_NATIVE_UA_TOKENS = listOf(
+        "chrome",
+        "crios",
+        "edg/",
+        "sec-ch-ua",
+        "windows nt"
+    )
 
     private val FORBIDDEN_UA_TOKENS = listOf(
         "chrome",
@@ -30,6 +39,14 @@ object GeckoDesktopIdentity {
             return false
         }
         return FORBIDDEN_UA_TOKENS.none { token -> lower.contains(token) }
+    }
+
+    fun isValidNativeFirefoxAndroidUa(ua: String): Boolean {
+        val lower = ua.lowercase()
+        if (!ua.contains("Android") || !ua.contains("Firefox/") || !ua.contains("Gecko/")) {
+            return false
+        }
+        return FORBIDDEN_NATIVE_UA_TOKENS.none { token -> lower.contains(token) }
     }
 
     fun shouldInterceptAsShortCode(url: String?): Boolean {

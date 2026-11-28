@@ -165,17 +165,15 @@ fun GeckoCaptureDialog(
         if (!sessionStarted.compareAndSet(false, true)) return
 
         try {
-            val desktopUa = GeckoDesktopIdentity.buildDesktopFirefoxUserAgent()
-            Log.i("AICL_GECKO", "GeckoSession Desktop Firefox UA: $desktopUa")
+            Log.i("AICL_GECKO", "GeckoSession using native Firefox Android UA (no userAgentOverride)")
             val sessionSettings = GeckoSessionSettings.Builder()
                 .usePrivateMode(false)
                 .useTrackingProtection(false)
                 .allowJavascript(true)
                 .suspendMediaWhenInactive(false)
-                .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
-                .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
+                .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
+                .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
                 .displayMode(GeckoSessionSettings.DISPLAY_MODE_BROWSER)
-                .userAgentOverride(desktopUa)
                 .build()
             val session = GeckoSession(sessionSettings).apply {
                 contentBlockingDelegate = object : ContentBlocking.Delegate {

@@ -54,7 +54,7 @@ object GeckoRuntimeManager {
                 val settings = GeckoRuntimeSettings.Builder()
                     .contentBlocking(contentBlocking)
                     .allowInsecureConnections(GeckoRuntimeSettings.ALLOW_ALL)
-                    .consoleOutput(true)
+                    .consoleOutput(false)
                     .automaticFontSizeAdjustment(false)
                     .enterpriseRootsEnabled(true)
                     .webFontsEnabled(true)
@@ -63,7 +63,7 @@ object GeckoRuntimeManager {
                 val created = GeckoRuntime.create(context.applicationContext, settings)
                 runtime = created
                 _state.value = GeckoRuntimeState(status = GeckoRuntimeStatus.READY)
-                Log.i(TAG, "GeckoRuntime initialized (Desktop Firefox ${GeckoDesktopIdentity.GECKO_MAJOR_VERSION})")
+                Log.i(TAG, "GeckoRuntime initialized (Native Firefox Android ${GeckoDesktopIdentity.GECKO_MAJOR_VERSION})")
                 ensureSvgCompatExtension(created) {}
                 created
             } catch (t: Throwable) {
