@@ -1,23 +1,15 @@
 name: Android Build & Release
 
 on:
-  pull_request:
-    branches: [dev, main]
-    types: [opened, synchronize, reopened]
   push:
     branches: [dev, main]
   workflow_dispatch:
 
 permissions:
   contents: write
-  pull-requests: write
-  issues: write
 
 jobs:
-  build-debug-apk:
-    if: >-
-      github.event_name != 'pull_request' ||
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -37,9 +29,8 @@ jobs:
       - name: Run unit tests and assembleDebug
         run: |
           chmod +x client/android/gradlew
-          set -o pipefail
           cd client/android
-          ./gradlew testDebugUnitTest assembleDebug --stacktrace 2>&1 | tee ../../build_output.log
+          ./gradlew testDebugUnitTest assembleDebug --stacktrace
 
       - name: Upload Debug APK artifact
         if: success()
@@ -49,60 +40,8 @@ jobs:
           path: client/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      - name: Comment failure log on PR
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.BOT_PAT || secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require('fs');
-            let raw = '';
-            if (fs.existsSync('build_output.log')) {
-              raw = fs.readFileSync('build_output.log', 'utf8');
-            }
-            const lines = raw.split('\n');
-            const interesting = [];
-            for (let i = 0; i < lines.length; i++) {
-              if (/FAILURE:|^(e:|> Task .* FAILED)|Exception:/i.test(lines[i])) {
-                interesting.push(...lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 12)));
-              }
-            }
-            let snippet = interesting.length > 0 ? interesting.join('\n') : lines.slice(-120).join('\n');
-            if (snippet.length > 40000) {
-              snippet = snippet.slice(-40000);
-            }
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = [
-              '### ❌ Android 构建或单元测试失败',
-              '',
-              '请贡献者确认以下三项：',
-              '1. 是否对代码进行过审查？',
-              '2. 验证脚本是否全部 pass？',
-              '3. 是否在本地跑过一遍？',
-              '',
-              `🔗 [查看完整 Actions 运行日志](${runUrl})`,
-              '',
-              '<details>',
-              '<summary>编译/测试失败原文日志</summary>',
-              '',
-              '```text',
-              snippet || '(empty log)',
-              '```',
-              '</details>'
-            ].join('\n');
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body
-            });
-
-      - name: Publish GitHub Release on dev/main push
-        if: >-
-          success() &&
-          github.event_name == 'push' &&
-          (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+      - name: Publish GitHub Release
+        if: success() && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
         env:
           GH_TOKEN: ${{ secrets.BOT_PAT || secrets.GITHUB_TOKEN }}
           BEFORE_SHA: ${{ github.event.before }}
@@ -114,35 +53,36 @@ jobs:
           gradle_file = "client/android/app/build.gradle.kts"
           repo = os.environ["GITHUB_REPOSITORY"]
           head_sha = os.environ["GITHUB_SHA"]
+          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
           before_sha = os.environ.get("BEFORE_SHA", "")
-
-          if not before_sha or set(before_sha) == {"0"}:
-              before_sha = subprocess.check_output(["git", "rev-parse", "HEAD~1"], text=True).strip()
-
-          # 1. Only release when client/android/ actually changed AND versionCode increased
-          changed = subprocess.check_output(
-              ["git", "diff", "--name-only", before_sha, head_sha], text=True
-          ).splitlines()
-          if not any(p.startswith("client/android/") for p in changed):
-              print("Skip release: no changes under client/android/.")
-              sys.exit(0)
 
           def parse_gradle_ver(txt):
               vc_m = re.search(r"versionCode\s*=\s*(\d+)", txt)
               vn_m = re.search(r'versionName\s*=\s*"([^"]+)"', txt)
               return (int(vc_m.group(1)) if vc_m else 0, vn_m.group(1) if vn_m else "")
 
-          prev_gradle = subprocess.check_output(
-              ["git", "show", f"{before_sha}:{gradle_file}"], text=True
-          )
           cur_gradle = open(gradle_file, encoding="utf-8").read()
-          prev_vc, _ = parse_gradle_ver(prev_gradle)
           gradle_vc, gradle_vn = parse_gradle_ver(cur_gradle)
-          if gradle_vc <= prev_vc:
-              print(f"Skip release: versionCode did not advance ({prev_vc} -> {gradle_vc}).")
-              sys.exit(0)
 
-          # 2. Read real versionName/versionCode from built APK via aapt2 dump badging
+          # On push, only release when client/android/ changed AND versionCode increased
+          if event_name == "push":
+              if not before_sha or set(before_sha) == {"0"}:
+                  before_sha = subprocess.check_output(["git", "rev-parse", "HEAD~1"], text=True).strip()
+              changed = subprocess.check_output(
+                  ["git", "diff", "--name-only", before_sha, head_sha], text=True
+              ).splitlines()
+              if not any(p.startswith("client/android/") for p in changed):
+                  print("Skip release: no changes under client/android/.")
+                  sys.exit(0)
+              prev_gradle = subprocess.check_output(
+                  ["git", "show", f"{before_sha}:{gradle_file}"], text=True
+              )
+              prev_vc, _ = parse_gradle_ver(prev_gradle)
+              if gradle_vc <= prev_vc:
+                  print(f"Skip release: versionCode did not advance ({prev_vc} -> {gradle_vc}).")
+                  sys.exit(0)
+
+          # Read real versionName/versionCode from built APK via aapt2 dump badging
           sdk_root = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME") or "/usr/local/lib/android/sdk"
           aapt2_candidates = sorted(glob.glob(os.path.join(sdk_root, "build-tools", "*", "aapt2")))
           if not aapt2_candidates:
@@ -167,7 +107,7 @@ jobs:
                   f"Non-compliant versionName '{apk_vn}' (normalized '{clean_vn}'): must match ^[0-9]+\\.[0-9]+\\.[0-9]+[a-z]$"
               )
 
-          # 3. Prevent lower versionCode from superseding existing releases
+          # Prevent lower versionCode from superseding existing releases
           releases_raw = subprocess.check_output(
               ["gh", "api", f"repos/{repo}/releases?per_page=100"], text=True
           )
@@ -181,7 +121,7 @@ jobs:
               if m_t:
                   max_vc = max(max_vc, int(m_t.group(1)))
               for asset in rel.get("assets", []):
-                  m_a = re.search(r"_vc(\d+)\.apk$", asset.get("name", ""))
+                  m_a = re.search(r"_vc(\d+)(?:_dev)?\.apk$", asset.get("name", ""))
                   if m_a:
                       max_vc = max(max_vc, int(m_a.group(1)))
           if apk_vc < max_vc:
