@@ -12,7 +12,7 @@ android {
         applicationId = "com.aliceincradle.launcher"
         minSdk = 24
         targetSdk = 34
-        versionCode = 26
+        versionCode = 27
         versionName = "0.1.2h"
     }
 
