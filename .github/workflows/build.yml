@@ -98,7 +98,7 @@ jobs:
               body
             });
 
-      - name: Publish formal GitHub Release on dev/main push
+      - name: Publish GitHub Release on dev/main push
         if: >-
           success() &&
           github.event_name == 'push' &&
@@ -188,11 +188,18 @@ jobs:
               raise RuntimeError(f"Anti-downgrade guard: apk versionCode {apk_vc} < max released vc{max_vc}")
 
           remote_tags = subprocess.check_output(["git", "ls-remote", "--tags", "origin"], text=True)
-          tag = f"v{clean_vn}"
-          if tag in existing_tags or f"refs/tags/{tag}" in remote_tags:
-              tag = f"v{clean_vn}-vc{apk_vc}"
+          github_ref = os.environ.get("GITHUB_REF", "")
+          if github_ref == "refs/heads/dev":
+              tag = f"v{clean_vn}-dev.{apk_vc}"
+              apk_name = f"AICL_v{clean_vn}_vc{apk_vc}_dev.apk"
+              release_flags = ["--prerelease", "--latest=false"]
+          else:
+              tag = f"v{clean_vn}"
+              if tag in existing_tags or f"refs/tags/{tag}" in remote_tags:
+                  tag = f"v{clean_vn}-vc{apk_vc}"
+              apk_name = f"AICL_v{clean_vn}_vc{apk_vc}.apk"
+              release_flags = ["--prerelease=false", "--latest"]
 
-          apk_name = f"AICL_v{clean_vn}_vc{apk_vc}.apk"
           shutil.copy2(apk_src, apk_name)
 
           if tag in existing_tags:
@@ -204,8 +211,9 @@ jobs:
                       "--title", f"AICLauncher {tag}",
                       "--target", head_sha,
                       "--generate-notes",
+                      *release_flags,
                   ],
                   check=True,
               )
-          print(f"Published formal release {tag} with {apk_name}")
+          print(f"Published release {tag} ({'prerelease' if github_ref == 'refs/heads/dev' else 'latest'}) with {apk_name}")
           PY
