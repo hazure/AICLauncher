@@ -257,6 +257,21 @@ jobs:
               });
             }
 
+            if ('${{ steps.review.outcome }}' === 'failure' && context.payload.pull_request.base.ref !== 'main') {
+              try {
+                await github.rest.pulls.createReview({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                  commit_id: context.payload.pull_request.head.sha,
+                  event: 'REQUEST_CHANGES',
+                  body
+                });
+              } catch (revErr) {
+                core.warning(`REQUEST_CHANGES review skipped: ${revErr.message}`);
+              }
+            }
+
   auto-merge:
     needs: [auto-review]
     if: >-
@@ -293,7 +308,7 @@ jobs:
             if (!pr) return;
 
             if (pr.base.ref === 'main') {
-              core.info('main 分支仅允许人工合并，跳过自动合并。');
+              core.info('main 分支仅允许人工审核与合并，跳过自动 APPROVE 与自动合并。');
               return;
             }
 
@@ -332,6 +347,31 @@ jobs:
                 core.info(`build-debug-apk on dev not yet succeeded (status=${buildRun?.status}, conclusion=${buildRun?.conclusion}).`);
                 return;
               }
+            }
+
+            try {
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number: pr.number,
+                per_page: 100
+              });
+              const alreadyApproved = reviews.some(
+                r => r.commit_id === pr.head.sha && r.state === 'APPROVED'
+              );
+              if (!alreadyApproved) {
+                await github.rest.pulls.createReview({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                  commit_id: pr.head.sha,
+                  event: 'APPROVE',
+                  body: '✅ AICL Auto-Review 与 CI 检查全部通过，由 github-actions[bot] 自动审批通过。'
+                });
+                core.info(`Approved PR #${pr.number} (${pr.head.sha}).`);
+              }
+            } catch (approveErr) {
+              core.warning(`Auto-APPROVE skipped/blocked (check can_approve_pull_request_reviews): ${approveErr.message}`);
             }
 
             try {
