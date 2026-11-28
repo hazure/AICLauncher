@@ -1,0 +1,400 @@
+name: PR Automation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+    branches: [main, dev, nocheck_dev]
+  workflow_run:
+    workflows: ["Android Build & Release"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  actions: read
+
+jobs:
+  auto-label:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label PR from title, commits, and changed paths
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_PAT || secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner,
+              repo,
+              pull_number: prNumber,
+              per_page: 100
+            });
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: prNumber,
+              per_page: 100
+            });
+
+            const texts = [pr.title || '', ...commits.map(c => c.commit.message || '')];
+            const prefixMap = [
+              { re: /^feat(\([^)]+\))?:/im, label: 'feat', color: '0e8a16', desc: 'New feature' },
+              { re: /^fix(\([^)]+\))?:/im, label: 'fix', color: 'd73a4a', desc: 'Bug fix' },
+              { re: /^docs(\([^)]+\))?:/im, label: 'docs', color: '0075ca', desc: 'Documentation' },
+              { re: /^refactor(\([^)]+\))?:/im, label: 'refactor', color: 'a2eeef', desc: 'Code refactoring' },
+              { re: /^ci(\([^)]+\))?:/im, label: 'ci', color: '1d76db', desc: 'CI/CD workflows' },
+              { re: /^test(\([^)]+\))?:/im, label: 'test', color: 'bfd4f2', desc: 'Tests' },
+              { re: /^chore(\([^)]+\))?:/im, label: 'chore', color: 'fef2c0', desc: 'Maintenance / release' }
+            ];
+
+            const wanted = new Map();
+            for (const rule of prefixMap) {
+              if (texts.some(t => rule.re.test(t.trim()))) {
+                wanted.set(rule.label, rule);
+              }
+            }
+
+            const paths = files.map(f => f.filename);
+            if (paths.some(p => p.startsWith('client/android/'))) {
+              wanted.set('android', { label: 'android', color: '3ddc84', desc: 'Android client' });
+            }
+            if (paths.some(p => p.startsWith('.github/'))) {
+              wanted.set('ci', { label: 'ci', color: '1d76db', desc: 'CI/CD workflows' });
+            }
+            if (paths.some(p => p.startsWith('AGENTS/'))) {
+              wanted.set('agents', { label: 'agents', color: '5319e7', desc: 'Agent rules and tasks' });
+            }
+
+            if (wanted.size === 0) {
+              core.info('No matching labels.');
+              return;
+            }
+
+            const existingLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
+              owner,
+              repo,
+              per_page: 100
+            });
+            const existingNames = new Set(existingLabels.map(l => l.name.toLowerCase()));
+
+            for (const [name, meta] of wanted.entries()) {
+              if (!existingNames.has(name.toLowerCase())) {
+                try {
+                  await github.rest.issues.createLabel({
+                    owner,
+                    repo,
+                    name: meta.label,
+                    color: meta.color,
+                    description: meta.desc
+                  });
+                } catch (e) {
+                  core.info(`Label ${meta.label} creation skipped: ${e.message}`);
+                }
+              }
+            }
+
+            const currentLabels = new Set((pr.labels || []).map(l => l.name.toLowerCase()));
+            const toAdd = [...wanted.keys()].filter(l => !currentLabels.has(l.toLowerCase()));
+            if (toAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: prNumber,
+                labels: toAdd
+              });
+            }
+
+  auto-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run deterministic static compliance checks
+        id: review
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+
+          base_ref = os.environ["BASE_REF"]
+          subprocess.run(["git", "fetch", "origin", base_ref], check=True)
+          base_sha = subprocess.check_output(["git", "rev-parse", f"origin/{base_ref}"], text=True).strip()
+          changed_files = subprocess.check_output(
+              ["git", "diff", "--name-only", f"{base_sha}...HEAD"], text=True
+          ).splitlines()
+
+          results = []
+          failed = False
+
+          def record(name, ok, detail):
+              global failed
+              if not ok:
+                  failed = True
+              results.append((name, "PASS" if ok else "FAIL", detail))
+
+          # 1. Hardcoded device paths & empty catch blocks in added Kotlin/Java lines
+          kt_java = [f for f in changed_files if f.endswith((".kt", ".java"))]
+          bad_paths = []
+          empty_catches = []
+          for f in kt_java:
+              diff = subprocess.check_output(["git", "diff", "-U0", f"{base_sha}...HEAD", "--", f], text=True, errors="replace")
+              added = [line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")]
+              joined = "\n".join(added)
+              for pat in ["/sdcard/", "/storage/emulated/0/", "~/storage/"]:
+                  if pat in joined:
+                      bad_paths.append(f"{f} ({pat})")
+              if re.search(r"\bcatch\s*\([^)]*\)\s*\{\s*\}", joined):
+                  empty_catches.append(f)
+          record(
+              "1. 硬编码路径与空 catch 检查 (PRINCIPLE.md)",
+              not bad_paths and not empty_catches,
+              "OK" if (not bad_paths and not empty_catches) else f"paths={bad_paths}, empty_catch={empty_catches}"
+          )
+
+          # 2. namespace & applicationId guard
+          gradle_path = "client/android/app/build.gradle.kts"
+          if os.path.exists(gradle_path):
+              gradle_txt = open(gradle_path, encoding="utf-8").read()
+              ns_ok = 'namespace = "com.aliceincradle.launcher"' in gradle_txt
+              app_ok = 'applicationId = "com.aliceincradle.launcher"' in gradle_txt
+              record("2. 包名与工程结构守卫", ns_ok and app_ok, "OK" if (ns_ok and app_ok) else "namespace or applicationId modified")
+          else:
+              record("2. 包名与工程结构守卫", False, "missing build.gradle.kts")
+
+          # 3. Version bump check when client/android/app/src/main/ is modified
+          src_modified = any(f.startswith("client/android/app/src/main/") for f in changed_files)
+          if src_modified:
+              base_gradle = subprocess.check_output(["git", "show", f"{base_sha}:{gradle_path}"], text=True)
+              cur_gradle = open(gradle_path, encoding="utf-8").read()
+              def parse_ver(txt):
+                  vc = re.search(r"versionCode\s*=\s*(\d+)", txt)
+                  vn = re.search(r'versionName\s*=\s*"([^"]+)"', txt)
+                  return (int(vc.group(1)) if vc else 0, vn.group(1) if vn else "")
+              b_vc, _ = parse_ver(base_gradle)
+              c_vc, c_vn = parse_ver(cur_gradle)
+              ver_ok = (c_vc > b_vc) and bool(re.match(r"^v?[0-9]+\.[0-9]+\.[0-9]+[a-z]$", c_vn))
+              record(
+                  "3. 版本号规范检查 (PROJECT_RULES.md)",
+                  ver_ok,
+                  f"versionCode {b_vc}->{c_vc}, versionName={c_vn}"
+              )
+          else:
+              record("3. 版本号规范检查 (PROJECT_RULES.md)", True, "Skipped (no app/src/main changes)")
+
+          # 4. main branch compliance check
+          if base_ref == "main":
+              readme_ok = os.path.exists("README.md") and ("免责声明" in open("README.md", encoding="utf-8").read())
+              lic_ok = os.path.exists("LICENSE") and ("MIT License" in open("LICENSE", encoding="utf-8").read())
+              record("4. main 分支合规检查 (README/MIT/免责声明)", readme_ok and lic_ok, f"readme={readme_ok}, license={lic_ok}")
+          else:
+              record("4. main 分支合规检查", True, f"Skipped (base={base_ref})")
+
+          # 5. nocheck_dev isolation check
+          if base_ref == "nocheck_dev":
+              has_build_yml = ".github/workflows/build.yml" in changed_files or os.path.exists(".github/workflows/build.yml")
+              record("5. nocheck_dev 隔离检查 (禁止 build.yml)", not has_build_yml, "OK" if not has_build_yml else "build.yml must NOT exist on nocheck_dev")
+          else:
+              record("5. nocheck_dev 隔离检查", True, f"Skipped (base={base_ref})")
+
+          lines = [
+              "<!-- aicl-auto-review -->",
+              f"### 🤖 AICL Auto-Review (`{base_ref}`)",
+              "",
+              "| 检查项 | 结果 | 详情 |",
+              "| :--- | :---: | :--- |",
+          ]
+          for name, st, detail in results:
+              icon = "✅ PASS" if st == "PASS" else "❌ FAIL"
+              lines.append(f"| {name} | {icon} | {detail} |")
+          open("review_comment.md", "w", encoding="utf-8").write("\n".join(lines))
+          if failed:
+              raise SystemExit(1)
+          PY
+
+      - name: Post or update review comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_PAT || secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('review_comment.md')) return;
+            const body = fs.readFileSync('review_comment.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const prNumber = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: prNumber,
+              per_page: 100
+            });
+            const existing = comments.find(c => (c.body || '').includes('<!-- aicl-auto-review -->'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body
+              });
+            }
+
+            if ('${{ steps.review.outcome }}' === 'failure' && context.payload.pull_request.base.ref !== 'main') {
+              try {
+                await github.rest.pulls.createReview({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                  commit_id: context.payload.pull_request.head.sha,
+                  event: 'REQUEST_CHANGES',
+                  body
+                });
+              } catch (revErr) {
+                core.warning(`REQUEST_CHANGES review skipped: ${revErr.message}`);
+              }
+            }
+
+  auto-merge:
+    needs: [auto-review]
+    if: >-
+      always() &&
+      (
+        (github.event_name == 'pull_request' && needs.auto-review.result == 'success') ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conditional auto-merge for dev and nocheck_dev only
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_PAT || secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            let pr = context.payload.pull_request;
+
+            if (!pr && context.eventName === 'workflow_run') {
+              const wr = context.payload.workflow_run;
+              const prs = wr.pull_requests || [];
+              if (prs.length === 0) {
+                core.info('No pull_request attached to workflow_run.');
+                return;
+              }
+              const { data } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: prs[0].number
+              });
+              pr = data;
+            }
+
+            if (!pr) return;
+
+            if (pr.base.ref === 'main') {
+              core.info('main 分支仅允许人工审核与合并，跳过自动 APPROVE 与自动合并。');
+              return;
+            }
+
+            if (pr.base.ref !== 'dev' && pr.base.ref !== 'nocheck_dev') {
+              core.info(`Unsupported base branch: ${pr.base.ref}`);
+              return;
+            }
+
+            if (pr.state !== 'open' || pr.draft) {
+              core.info(`PR #${pr.number} is not open/ready (state=${pr.state}, draft=${pr.draft}).`);
+              return;
+            }
+
+            const allowedAuthors = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            if (!allowedAuthors.has(pr.author_association)) {
+              core.info(`Author association ${pr.author_association} not authorized for auto-merge.`);
+              return;
+            }
+
+            const { data: checks } = await github.rest.checks.listForRef({
+              owner,
+              repo,
+              ref: pr.head.sha,
+              per_page: 100
+            });
+
+            const reviewRun = checks.check_runs.find(r => r.name === 'auto-review');
+            if (!reviewRun || reviewRun.conclusion !== 'success') {
+              core.info(`auto-review not yet succeeded (conclusion=${reviewRun?.conclusion}).`);
+              return;
+            }
+
+            if (pr.base.ref === 'dev') {
+              const buildRun = checks.check_runs.find(r => r.name === 'build-debug-apk');
+              if (!buildRun || buildRun.conclusion !== 'success') {
+                core.info(`build-debug-apk on dev not yet succeeded (status=${buildRun?.status}, conclusion=${buildRun?.conclusion}).`);
+                return;
+              }
+            }
+
+            try {
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number: pr.number,
+                per_page: 100
+              });
+              const alreadyApproved = reviews.some(
+                r => r.commit_id === pr.head.sha && r.state === 'APPROVED'
+              );
+              if (!alreadyApproved) {
+                await github.rest.pulls.createReview({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                  commit_id: pr.head.sha,
+                  event: 'APPROVE',
+                  body: '✅ AICL Auto-Review 与 CI 检查全部通过，由 github-actions[bot] 自动审批通过。'
+                });
+                core.info(`Approved PR #${pr.number} (${pr.head.sha}).`);
+              }
+            } catch (approveErr) {
+              core.warning(`Auto-APPROVE skipped/blocked (check can_approve_pull_request_reviews): ${approveErr.message}`);
+            }
+
+            try {
+              await github.rest.pulls.merge({
+                owner,
+                repo,
+                pull_number: pr.number,
+                merge_method: 'merge',
+                sha: pr.head.sha
+              });
+              core.info(`Merged PR #${pr.number} into ${pr.base.ref}.`);
+
+              if (pr.head.repo && pr.head.repo.full_name === `${owner}/${repo}`) {
+                try {
+                  await github.rest.git.deleteRef({
+                    owner,
+                    repo,
+                    ref: `heads/${pr.head.ref}`
+                  });
+                } catch (delErr) {
+                  core.info(`Branch cleanup skipped: ${delErr.message}`);
+                }
+              }
+            } catch (mergeErr) {
+              core.warning(`Auto-merge skipped/blocked by branch policy: ${mergeErr.message}`);
+            }
