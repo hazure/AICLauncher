@@ -40,4 +40,14 @@ class GeckoDesktopIdentityTest {
             )
         )
     }
+
+    @Test
+    fun requestPolicy_allowsImagesAndCdn_andOnlyInterceptsShortLinks() {
+        assertFalse(GeckoDesktopIdentity.shouldInterceptAsShortCode("https://get.aliceincradle.dev/win/"))
+        assertFalse(GeckoDesktopIdentity.shouldInterceptAsShortCode("https://get.aliceincradle.dev/_img/noel.webp"))
+        assertTrue(GeckoDesktopIdentity.isAllowedNavigationRequest("https://get.aliceincradle.dev/_img/noel.webp"))
+        assertTrue(GeckoDesktopIdentity.isAllowedNavigationRequest("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b"))
+        assertTrue(GeckoDesktopIdentity.shouldInterceptAsShortCode("https://vanilla.shiro.dev/f/abc123/AliceInCradle_Win_Latest.7z"))
+        assertFalse(GeckoDesktopIdentity.isAllowedNavigationRequest("https://vanilla.shiro.dev/f/abc123/AliceInCradle_Win_Latest.7z"))
+    }
 }

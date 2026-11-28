@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
 
@@ -39,7 +40,16 @@ object GeckoRuntimeManager {
             runtime?.let { return it }
             _state.value = GeckoRuntimeState(status = GeckoRuntimeStatus.INITIALIZING)
             try {
+                val contentBlocking = ContentBlocking.Settings.Builder()
+                    .antiTracking(ContentBlocking.AntiTracking.NONE)
+                    .enhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.NONE)
+                    .cookieBehavior(ContentBlocking.CookieBehavior.ACCEPT_ALL)
+                    .strictSocialTrackingProtection(false)
+                    .queryParameterStrippingEnabled(false)
+                    .build()
                 val settings = GeckoRuntimeSettings.Builder()
+                    .contentBlocking(contentBlocking)
+                    .allowInsecureConnections(GeckoRuntimeSettings.ALLOW_ALL)
                     .consoleOutput(true)
                     .automaticFontSizeAdjustment(false)
                     .locales(arrayOf("en-US", "zh-CN"))

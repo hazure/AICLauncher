@@ -40,6 +40,7 @@ import com.aliceincradle.launcher.bridge.GeckoRuntimeStatus
 import com.aliceincradle.launcher.bridge.ShortCodeRelayExtractor
 import java.util.concurrent.atomic.AtomicBoolean
 import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
@@ -162,7 +163,7 @@ fun GeckoCaptureDialog(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(340.dp)
+                            .height(380.dp)
                     ) {
                         AndroidView(
                             modifier = Modifier.fillMaxSize(),
@@ -178,11 +179,26 @@ fun GeckoCaptureDialog(
                                     Log.i("AICL_GECKO", "GeckoSession Desktop Firefox UA: $desktopUa")
                                     val sessionSettings = GeckoSessionSettings.Builder()
                                         .usePrivateMode(false)
+                                        .useTrackingProtection(false)
+                                        .allowJavascript(true)
+                                        .suspendMediaWhenInactive(false)
                                         .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
+                                        .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
                                         .displayMode(GeckoSessionSettings.DISPLAY_MODE_BROWSER)
                                         .userAgentOverride(desktopUa)
                                         .build()
                                     val session = GeckoSession(sessionSettings).apply {
+                                        contentBlockingDelegate = object : ContentBlocking.Delegate {
+                                            override fun onContentBlocked(
+                                                session: GeckoSession,
+                                                event: ContentBlocking.BlockEvent
+                                            ) {
+                                                Log.w(
+                                                    "AICL_GECKO",
+                                                    "onContentBlocked uri=${event.uri} antiTracking=${event.antiTrackingCategory}"
+                                                )
+                                            }
+                                        }
                                         progressDelegate = object : GeckoSession.ProgressDelegate {
                                             override fun onProgressChange(session: GeckoSession, p: Int) {
                                                 if (!disposed.get()) {
@@ -219,7 +235,9 @@ fun GeckoCaptureDialog(
                                                 session: GeckoSession,
                                                 request: GeckoSession.NavigationDelegate.LoadRequest
                                             ): GeckoResult<AllowOrDeny> {
-                                                return if (tryCaptureUrl(request.uri)) {
+                                                return if (GeckoDesktopIdentity.shouldInterceptAsShortCode(request.uri) &&
+                                                    tryCaptureUrl(request.uri)
+                                                ) {
                                                     GeckoResult.fromValue(AllowOrDeny.DENY)
                                                 } else {
                                                     GeckoResult.fromValue(AllowOrDeny.ALLOW)
@@ -231,10 +249,14 @@ fun GeckoCaptureDialog(
                                                 uri: String?,
                                                 error: WebRequestError
                                             ): GeckoResult<String>? {
+                                                Log.e(
+                                                    "AICL_GECKO",
+                                                    "onLoadError uri=$uri category=${error.category} code=${error.code}"
+                                                )
                                                 if (!disposed.get()) {
                                                     mainHandler.post {
                                                         isLoading = false
-                                                        errorMessage = "页面加载失败（code=${error.code}），可改用外部浏览器打开"
+                                                        errorMessage = "页面加载失败（code=${error.code}），可重试或改用外部浏览器打开"
                                                     }
                                                 }
                                                 return null
@@ -274,6 +296,7 @@ fun GeckoCaptureDialog(
                                         }
                                     }
                                     session.open(runtime)
+                                    session.setActive(true)
                                     gv.setSession(session)
                                     sessionHolder.ref = session
                                     viewHolder.ref = gv
@@ -295,6 +318,24 @@ fun GeckoCaptureDialog(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            try {
+                                errorMessage = null
+                                isLoading = true
+                                sessionHolder.ref?.apply {
+                                    setActive(true)
+                                    loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
+                                }
+                            } catch (t: Throwable) {
+                                Log.e("AICL_GECKO", "Failed retrying GeckoSession loadUri", t)
+                                errorMessage = "重试失败，请改用外部浏览器打开"
+                                isLoading = false
+                            }
+                        }
+                    ) {
+                        Text(text = "重试")
+                    }
                     OutlinedButton(onClick = onFallbackExternalRelay) {
                         Text(text = "改用外部浏览器打开")
                     }

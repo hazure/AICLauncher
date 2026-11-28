@@ -32,6 +32,23 @@ object GeckoDesktopIdentity {
         return FORBIDDEN_UA_TOKENS.none { token -> lower.contains(token) }
     }
 
+    fun shouldInterceptAsShortCode(url: String?): Boolean {
+        val candidate = url?.trim().orEmpty()
+        if (candidate.isEmpty()) return false
+        return GameSourceResolver.parseShortLinkUrl(candidate) != null
+    }
+
+    fun isAllowedNavigationRequest(url: String?): Boolean {
+        val candidate = url?.trim().orEmpty()
+        if (candidate.isEmpty()) return false
+        if (shouldInterceptAsShortCode(candidate)) return false
+        val lower = candidate.lowercase()
+        return lower.startsWith("https://") ||
+            lower.startsWith("http://") ||
+            lower.startsWith("blob:") ||
+            lower.startsWith("data:")
+    }
+
     fun extractFileNameFromContentDisposition(contentDisposition: String?, fallbackUrl: String): String {
         val cd = contentDisposition.orEmpty()
         if (cd.isNotBlank()) {
