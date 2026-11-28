@@ -3,16 +3,17 @@ package com.aliceincradle.launcher.ui
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -26,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -64,6 +66,7 @@ fun GeckoCaptureDialog(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val completed = remember { AtomicBoolean(false) }
     val disposed = remember { AtomicBoolean(false) }
+    val sessionStarted = remember { AtomicBoolean(false) }
     val sessionHolder = remember { GeckoRefHolder<GeckoSession>() }
     val viewHolder = remember { GeckoRefHolder<GeckoView>() }
 
@@ -124,22 +127,200 @@ fun GeckoCaptureDialog(
         return true
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(text = "应用内下载验证（Gecko）") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = errorMessage ?: if (isLoading) "正在加载官方下载页..." else "请完成验证并点击下载按钮",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (errorMessage != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                LinearProgressIndicator(
-                    progress = { (progress / 100f).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
-                )
+    BackHandler(enabled = true, onBack = onDismiss)
 
-                if (runtime == null || runtimeState.status == GeckoRuntimeStatus.FAILED) {
+    fun startSessionIfReady(gv: GeckoView) {
+        val activeRuntime = runtime ?: return
+        if (disposed.get() || sessionStarted.get()) return
+        if (!gv.isAttachedToWindow || gv.width <= 0 || gv.height <= 0) return
+        if (!sessionStarted.compareAndSet(false, true)) return
+
+        try {
+            val desktopUa = GeckoDesktopIdentity.buildDesktopFirefoxUserAgent()
+            Log.i("AICL_GECKO", "GeckoSession Desktop Firefox UA: $desktopUa")
+            val sessionSettings = GeckoSessionSettings.Builder()
+                .usePrivateMode(false)
+                .useTrackingProtection(false)
+                .allowJavascript(true)
+                .suspendMediaWhenInactive(false)
+                .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
+                .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
+                .displayMode(GeckoSessionSettings.DISPLAY_MODE_BROWSER)
+                .userAgentOverride(desktopUa)
+                .build()
+            val session = GeckoSession(sessionSettings).apply {
+                contentBlockingDelegate = object : ContentBlocking.Delegate {
+                    override fun onContentBlocked(
+                        session: GeckoSession,
+                        event: ContentBlocking.BlockEvent
+                    ) {
+                        Log.w(
+                            "AICL_GECKO",
+                            "onContentBlocked uri=${event.uri} antiTracking=${event.antiTrackingCategory}"
+                        )
+                    }
+                }
+                progressDelegate = object : GeckoSession.ProgressDelegate {
+                    override fun onProgressChange(session: GeckoSession, p: Int) {
+                        if (!disposed.get()) {
+                            mainHandler.post { progress = p.coerceIn(0, 100) }
+                        }
+                    }
+
+                    override fun onPageStart(session: GeckoSession, url: String) {
+                        if (!disposed.get()) {
+                            mainHandler.post {
+                                isLoading = true
+                                errorMessage = null
+                            }
+                        }
+                    }
+
+                    override fun onPageStop(session: GeckoSession, success: Boolean) {
+                        if (!disposed.get()) {
+                            mainHandler.post { isLoading = false }
+                        }
+                    }
+                }
+                navigationDelegate = object : GeckoSession.NavigationDelegate {
+                    override fun onLocationChange(
+                        session: GeckoSession,
+                        url: String?,
+                        perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
+                        hasUserGesture: Boolean
+                    ) {
+                        tryCaptureUrl(url)
+                    }
+
+                    override fun onLoadRequest(
+                        session: GeckoSession,
+                        request: GeckoSession.NavigationDelegate.LoadRequest
+                    ): GeckoResult<AllowOrDeny> {
+                        return if (GeckoDesktopIdentity.shouldInterceptAsShortCode(request.uri) &&
+                            tryCaptureUrl(request.uri)
+                        ) {
+                            GeckoResult.fromValue(AllowOrDeny.DENY)
+                        } else {
+                            GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                        }
+                    }
+
+                    override fun onLoadError(
+                        session: GeckoSession,
+                        uri: String?,
+                        error: WebRequestError
+                    ): GeckoResult<String>? {
+                        Log.e(
+                            "AICL_GECKO",
+                            "onLoadError uri=$uri category=${error.category} code=${error.code}"
+                        )
+                        if (!disposed.get()) {
+                            mainHandler.post {
+                                isLoading = false
+                                errorMessage = "页面加载失败（code=${error.code}），可重试或改用外部浏览器打开"
+                            }
+                        }
+                        return null
+                    }
+                }
+                contentDelegate = object : GeckoSession.ContentDelegate {
+                    override fun onExternalResponse(
+                        session: GeckoSession,
+                        response: WebResponse
+                    ) {
+                        try {
+                            val uri = response.uri
+                            val contentDisp = response.headers.entries
+                                .firstOrNull { it.key.equals("content-disposition", ignoreCase = true) }
+                                ?.value
+                            val fileName = GeckoDesktopIdentity.extractFileNameFromContentDisposition(
+                                contentDisposition = contentDisp,
+                                fallbackUrl = uri
+                            )
+                            if (!tryCaptureUrl(uri) &&
+                                uri.isNotBlank() &&
+                                !disposed.get() &&
+                                completed.compareAndSet(false, true)
+                            ) {
+                                mainHandler.post {
+                                    if (!disposed.get()) {
+                                        onDirectDownloadUrl(uri, fileName)
+                                    }
+                                }
+                            }
+                        } catch (t: Throwable) {
+                            Log.e("AICL_GECKO", "Failed handling Gecko onExternalResponse", t)
+                        } finally {
+                            runCatching { response.body?.close() }
+                        }
+                    }
+                }
+            }
+            session.open(activeRuntime)
+            gv.setSession(session)
+            session.setActive(true)
+            sessionHolder.ref = session
+            viewHolder.ref = gv
+            gv.post {
+                if (!disposed.get()) {
+                    try {
+                        session.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
+                    } catch (t: Throwable) {
+                        Log.e("AICL_GECKO", "Failed loading initial GeckoSession URI", t)
+                        isLoading = false
+                        errorMessage = "页面加载启动失败，请重试或改用外部浏览器打开"
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e("AICL_GECKO", "Failed creating GeckoSession", t)
+            mainHandler.post {
+                isLoading = false
+                errorMessage = "Gecko 会话启动失败，请改用外部浏览器打开"
+            }
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "应用内下载验证（Gecko）",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                TextButton(onClick = onDismiss) {
+                    Text(text = "取消")
+                }
+            }
+            Text(
+                text = errorMessage ?: if (isLoading) "正在加载官方下载页..." else "请完成验证并点击下载按钮",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (errorMessage != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            LinearProgressIndicator(
+                progress = { (progress / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (runtime == null || runtimeState.status == GeckoRuntimeStatus.FAILED) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
                         shape = MaterialTheme.shapes.small,
@@ -159,198 +340,92 @@ fun GeckoCaptureDialog(
                             }
                         }
                     }
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(380.dp)
-                    ) {
-                        AndroidView(
-                            modifier = Modifier.fillMaxSize(),
-                            factory = { ctx ->
-                                val gv = GeckoView(ctx).apply {
-                                    layoutParams = ViewGroup.LayoutParams(
-                                        ViewGroup.LayoutParams.MATCH_PARENT,
-                                        ViewGroup.LayoutParams.MATCH_PARENT
-                                    )
-                                }
-                                try {
-                                    val desktopUa = GeckoDesktopIdentity.buildDesktopFirefoxUserAgent()
-                                    Log.i("AICL_GECKO", "GeckoSession Desktop Firefox UA: $desktopUa")
-                                    val sessionSettings = GeckoSessionSettings.Builder()
-                                        .usePrivateMode(false)
-                                        .useTrackingProtection(false)
-                                        .allowJavascript(true)
-                                        .suspendMediaWhenInactive(false)
-                                        .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
-                                        .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
-                                        .displayMode(GeckoSessionSettings.DISPLAY_MODE_BROWSER)
-                                        .userAgentOverride(desktopUa)
-                                        .build()
-                                    val session = GeckoSession(sessionSettings).apply {
-                                        contentBlockingDelegate = object : ContentBlocking.Delegate {
-                                            override fun onContentBlocked(
-                                                session: GeckoSession,
-                                                event: ContentBlocking.BlockEvent
-                                            ) {
-                                                Log.w(
-                                                    "AICL_GECKO",
-                                                    "onContentBlocked uri=${event.uri} antiTracking=${event.antiTrackingCategory}"
-                                                )
-                                            }
-                                        }
-                                        progressDelegate = object : GeckoSession.ProgressDelegate {
-                                            override fun onProgressChange(session: GeckoSession, p: Int) {
-                                                if (!disposed.get()) {
-                                                    mainHandler.post { progress = p.coerceIn(0, 100) }
-                                                }
-                                            }
-
-                                            override fun onPageStart(session: GeckoSession, url: String) {
-                                                if (!disposed.get()) {
-                                                    mainHandler.post {
-                                                        isLoading = true
-                                                        errorMessage = null
-                                                    }
-                                                }
-                                            }
-
-                                            override fun onPageStop(session: GeckoSession, success: Boolean) {
-                                                if (!disposed.get()) {
-                                                    mainHandler.post { isLoading = false }
-                                                }
-                                            }
-                                        }
-                                        navigationDelegate = object : GeckoSession.NavigationDelegate {
-                                            override fun onLocationChange(
-                                                session: GeckoSession,
-                                                url: String?,
-                                                perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
-                                                hasUserGesture: Boolean
-                                            ) {
-                                                tryCaptureUrl(url)
-                                            }
-
-                                            override fun onLoadRequest(
-                                                session: GeckoSession,
-                                                request: GeckoSession.NavigationDelegate.LoadRequest
-                                            ): GeckoResult<AllowOrDeny> {
-                                                return if (GeckoDesktopIdentity.shouldInterceptAsShortCode(request.uri) &&
-                                                    tryCaptureUrl(request.uri)
-                                                ) {
-                                                    GeckoResult.fromValue(AllowOrDeny.DENY)
-                                                } else {
-                                                    GeckoResult.fromValue(AllowOrDeny.ALLOW)
-                                                }
-                                            }
-
-                                            override fun onLoadError(
-                                                session: GeckoSession,
-                                                uri: String?,
-                                                error: WebRequestError
-                                            ): GeckoResult<String>? {
-                                                Log.e(
-                                                    "AICL_GECKO",
-                                                    "onLoadError uri=$uri category=${error.category} code=${error.code}"
-                                                )
-                                                if (!disposed.get()) {
-                                                    mainHandler.post {
-                                                        isLoading = false
-                                                        errorMessage = "页面加载失败（code=${error.code}），可重试或改用外部浏览器打开"
-                                                    }
-                                                }
-                                                return null
-                                            }
-                                        }
-                                        contentDelegate = object : GeckoSession.ContentDelegate {
-                                            override fun onExternalResponse(
-                                                session: GeckoSession,
-                                                response: WebResponse
-                                            ) {
-                                                try {
-                                                    val uri = response.uri
-                                                    val contentDisp = response.headers.entries
-                                                        .firstOrNull { it.key.equals("content-disposition", ignoreCase = true) }
-                                                        ?.value
-                                                    val fileName = GeckoDesktopIdentity.extractFileNameFromContentDisposition(
-                                                        contentDisposition = contentDisp,
-                                                        fallbackUrl = uri
-                                                    )
-                                                    if (!tryCaptureUrl(uri) &&
-                                                        uri.isNotBlank() &&
-                                                        !disposed.get() &&
-                                                        completed.compareAndSet(false, true)
-                                                    ) {
-                                                        mainHandler.post {
-                                                            if (!disposed.get()) {
-                                                                onDirectDownloadUrl(uri, fileName)
-                                                            }
-                                                        }
-                                                    }
-                                                } catch (t: Throwable) {
-                                                    Log.e("AICL_GECKO", "Failed handling Gecko onExternalResponse", t)
-                                                } finally {
-                                                    runCatching { response.body?.close() }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    session.open(runtime)
-                                    session.setActive(true)
-                                    gv.setSession(session)
-                                    sessionHolder.ref = session
-                                    viewHolder.ref = gv
-                                    session.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
-                                } catch (t: Throwable) {
-                                    Log.e("AICL_GECKO", "Failed creating GeckoSession", t)
-                                    mainHandler.post {
-                                        isLoading = false
-                                        errorMessage = "Gecko 会话启动失败，请改用外部浏览器打开"
-                                    }
-                                }
-                                gv
-                            },
-                            onRelease = { released ->
-                                runCatching { released.releaseSession() }
-                            }
-                        )
-                    }
                 }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = {
-                            try {
-                                errorMessage = null
-                                isLoading = true
-                                sessionHolder.ref?.apply {
-                                    setActive(true)
-                                    loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
-                                }
-                            } catch (t: Throwable) {
-                                Log.e("AICL_GECKO", "Failed retrying GeckoSession loadUri", t)
-                                errorMessage = "重试失败，请改用外部浏览器打开"
-                                isLoading = false
+            } else {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctx ->
+                            val gv = GeckoView(ctx).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
                             }
+                            viewHolder.ref = gv
+                            val layoutListener = object : View.OnLayoutChangeListener {
+                                override fun onLayoutChange(
+                                    v: View,
+                                    left: Int,
+                                    top: Int,
+                                    right: Int,
+                                    bottom: Int,
+                                    oldLeft: Int,
+                                    oldTop: Int,
+                                    oldRight: Int,
+                                    oldBottom: Int
+                                ) {
+                                    startSessionIfReady(gv)
+                                    if (sessionStarted.get()) {
+                                        gv.removeOnLayoutChangeListener(this)
+                                    }
+                                }
+                            }
+                            gv.addOnLayoutChangeListener(layoutListener)
+                            gv.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                                override fun onViewAttachedToWindow(v: View) {
+                                    gv.post { startSessionIfReady(gv) }
+                                }
+
+                                override fun onViewDetachedFromWindow(v: View) {
+                                    gv.removeOnLayoutChangeListener(layoutListener)
+                                }
+                            })
+                            gv
+                        },
+                        onRelease = { released ->
+                            runCatching { released.releaseSession() }
                         }
-                    ) {
-                        Text(text = "重试")
-                    }
-                    OutlinedButton(onClick = onFallbackExternalRelay) {
-                        Text(text = "改用外部浏览器打开")
-                    }
+                    )
                 }
             }
-        },
-        confirmButton = {
-            OutlinedButton(onClick = onFallbackManual) {
-                Text(text = "手动填入短码")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(text = "取消")
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            errorMessage = null
+                            isLoading = true
+                            val existingSession = sessionHolder.ref
+                            if (existingSession != null) {
+                                existingSession.setActive(true)
+                                existingSession.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
+                            } else {
+                                viewHolder.ref?.let { startSessionIfReady(it) }
+                            }
+                        } catch (t: Throwable) {
+                            Log.e("AICL_GECKO", "Failed retrying GeckoSession loadUri", t)
+                            errorMessage = "重试失败，请改用外部浏览器打开"
+                            isLoading = false
+                        }
+                    }
+                ) {
+                    Text(text = "重试")
+                }
+                OutlinedButton(onClick = onFallbackExternalRelay) {
+                    Text(text = "改用外部浏览器打开")
+                }
+                OutlinedButton(onClick = onFallbackManual) {
+                    Text(text = "手动填入短码")
+                }
             }
         }
-    )
+    }
 }

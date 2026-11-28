@@ -66,7 +66,11 @@ fun MainScreen(viewModel: MainViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showGameDirPicker by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = uiState.selectedTab == MainTab.FILES && uiState.folderPage.activeDialog == null) {
+    BackHandler(
+        enabled = uiState.selectedTab == MainTab.FILES &&
+            uiState.folderPage.activeDialog == null &&
+            uiState.downloadPage.pendingCaptureItemId == null
+    ) {
         viewModel.onFolderBackPressed()
     }
 
@@ -78,6 +82,7 @@ fun MainScreen(viewModel: MainViewModel) {
         }
     }
 
+    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         floatingActionButton = {
@@ -373,6 +378,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 onDismiss = { viewModel.onShortCodeCaptureCancelled(openManualDialog = false) }
             )
         }
+    }
     }
 }
 
