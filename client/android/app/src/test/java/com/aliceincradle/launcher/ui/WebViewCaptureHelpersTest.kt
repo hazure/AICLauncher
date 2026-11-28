@@ -35,4 +35,14 @@ class WebViewCaptureHelpersTest {
         assertEquals(true, DESKTOP_CHROME_UA.contains("Chrome/"))
         assertEquals(false, DESKTOP_CHROME_UA.contains("Mobile"))
     }
+
+    @Test
+    fun cloudflareChallengeDetection_andAllowedHosts_workAsExpected() {
+        assertEquals(true, isAllowedNavigationHost("get.aliceincradle.dev"))
+        assertEquals(true, isAllowedNavigationHost("challenges.cloudflare.com"))
+        assertEquals(false, isAllowedNavigationHost("evil.example.com"))
+        assertEquals(true, isCloudflareChallengeUrl("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b"))
+        assertEquals(true, isCloudflareChallengeUrl("https://dl.aliceincradle.dev/?__cf_chl_tk=abc"))
+        assertEquals(false, isCloudflareChallengeUrl("https://get.aliceincradle.dev/win/"))
+    }
 }

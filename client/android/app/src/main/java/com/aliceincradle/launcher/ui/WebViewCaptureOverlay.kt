@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -60,6 +61,7 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,8 +79,12 @@ internal const val ZOOM_STEP_PERCENT = 10
 
 private const val MIN_RECOMMENDED_WEBVIEW_MAJOR = 115
 private const val PAGE_LOAD_TIMEOUT_MS = 15_000L
+private const val CHALLENGE_WAIT_TIMEOUT_MS = 45_000L
 private const val DOM_POLL_INTERVAL_MS = 500L
 private const val DOM_POLL_MAX_ATTEMPTS = 12
+private const val EXTRA_CUSTOM_TABS_SESSION = "android.support.customtabs.extra.SESSION"
+private const val EXTRA_CUSTOM_TABS_TITLE_VISIBILITY = "android.support.customtabs.extra.TITLE_VISIBILITY"
+private const val EXTRA_CUSTOM_TABS_URLBAR_HIDING = "android.support.customtabs.extra.ENABLE_URLBAR_HIDING"
 private const val PLAY_STORE_WEBVIEW_MARKET_URI = "market://details?id=com.google.android.webview"
 private const val PLAY_STORE_WEBVIEW_HTTPS_URL = "https://play.google.com/store/apps/details?id=com.google.android.webview"
 
@@ -110,6 +116,11 @@ private val SMART_CAPTURE_AND_AGREE_JS = """
             if (cand.indexOf('vanilla.shiro.dev/f/') !== -1) {
                 return cand;
             }
+        }
+        var cfNode = document.querySelector('iframe[src*="challenges.cloudflare.com"], #challenge-running, #challenge-stage, .cf-turnstile, [name="cf-turnstile-response"]');
+        var docTitle = (document.title || '').toLowerCase();
+        if (cfNode || /just a moment|attention required|checking your browser/.test(docTitle)) {
+            return 'CHALLENGE';
         }
         var pre = document.getElementById('preloader');
         if (pre) {
@@ -299,6 +310,46 @@ private fun WebViewZoomToolbar(
     }
 }
 
+internal fun isAllowedNavigationHost(host: String): Boolean {
+    val h = host.trim().lowercase()
+    if (h.isEmpty()) return true
+    if (h in GameSourceResolver.ALLOWED_OFFICIAL_HOSTS) return true
+    if (h == "challenges.cloudflare.com" || h.endsWith(".cloudflare.com")) return true
+    if (h.endsWith(".aliceincradle.dev") || h.endsWith(".shiro.dev")) return true
+    return false
+}
+
+internal fun isCloudflareChallengeUrl(url: String?): Boolean {
+    val u = url?.trim()?.lowercase().orEmpty()
+    if (u.isEmpty()) return false
+    return u.contains("challenges.cloudflare.com") ||
+        u.contains("__cf_chl_") ||
+        u.contains("/cdn-cgi/challenge-platform")
+}
+
+private fun flushWebViewCookies() {
+    try {
+        CookieManager.getInstance().flush()
+    } catch (t: Throwable) {
+        Log.w("AICL_WEBVIEW", "CookieManager.flush failed", t)
+    }
+}
+
+private fun openInCustomTabsOrBrowser(context: Context, url: String) {
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            putExtras(Bundle().apply { putBinder(EXTRA_CUSTOM_TABS_SESSION, null) })
+            putExtra(EXTRA_CUSTOM_TABS_TITLE_VISIBILITY, 1)
+            putExtra(EXTRA_CUSTOM_TABS_URLBAR_HIDING, true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (t: Throwable) {
+        Log.w("AICL_WEBVIEW", "Custom Tabs launch failed, falling back to system browser", t)
+        openInSystemBrowser(context, url)
+    }
+}
+
 private fun openInSystemBrowser(context: Context, url: String) {
     try {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
@@ -458,8 +509,10 @@ fun ShortCodeCaptureDialog(
     var clipboardCandidate by remember { mutableStateOf<Pair<String, String>?>(null) }
     var dismissedClipboardCode by remember { mutableStateOf<String?>(null) }
     var zoomPercent by remember { mutableStateOf(DEFAULT_ZOOM_PERCENT) }
+    var inCloudflareChallenge by remember { mutableStateOf(false) }
     val completed = remember { AtomicBoolean(false) }
     val disposed = remember { AtomicBoolean(false) }
+    val sessionToken = remember { AtomicInteger(0) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val webViewHolder = remember { WebViewHolder<WebView>() }
 
@@ -484,13 +537,18 @@ fun ShortCodeCaptureDialog(
         }
     }
 
-    LaunchedEffect(retryKey) {
-        delay(PAGE_LOAD_TIMEOUT_MS)
-        if (!pageFinished && !completed.get() && loadErrorMessage == null) {
+    LaunchedEffect(retryKey, inCloudflareChallenge) {
+        val waitMs = if (inCloudflareChallenge) CHALLENGE_WAIT_TIMEOUT_MS else PAGE_LOAD_TIMEOUT_MS
+        delay(waitMs)
+        if (!pageFinished && !completed.get() && !disposed.get() && loadErrorMessage == null) {
             isLoading = false
             loadErrorMessage = "加载失败"
-            statusText = "页面加载超时（15s），请重试或去系统浏览器打开"
-            Log.w("AICL_WEBVIEW", "ShortCodeCaptureDialog page load timed out after 15s (ver=${versionInfo.versionName})")
+            statusText = if (inCloudflareChallenge) {
+                "人机验证等待超时，请使用 Custom Tabs 或外部浏览器完成"
+            } else {
+                "页面加载超时（15s），请重试或去系统浏览器打开"
+            }
+            Log.w("AICL_WEBVIEW", "ShortCodeCaptureDialog timed out after ${waitMs}ms (cf=$inCloudflareChallenge)")
         }
     }
 
@@ -517,32 +575,49 @@ fun ShortCodeCaptureDialog(
     }
 
     DisposableEffect(Unit) {
-        val timeoutRunnable = Runnable {
-            if (completed.compareAndSet(false, true)) {
-                isLoading = false
-                statusText = "捕获超时，请改用手动填入短码"
+        val timeoutRunnable = object : Runnable {
+            override fun run() {
+                if (disposed.get() || completed.get()) return
+                if (inCloudflareChallenge) {
+                    mainHandler.postDelayed(this, CHALLENGE_WAIT_TIMEOUT_MS)
+                    return
+                }
+                if (completed.compareAndSet(false, true)) {
+                    isLoading = false
+                    statusText = "捕获超时，请改用手动填入短码"
+                }
             }
         }
         mainHandler.postDelayed(timeoutRunnable, GameSourceResolver.WEBVIEW_TIMEOUT_MS)
         onDispose {
             disposed.set(true)
+            sessionToken.incrementAndGet()
             mainHandler.removeCallbacksAndMessages(null)
             safeDestroyWebView(webViewHolder.ref)
             webViewHolder.ref = null
         }
     }
 
-    fun scheduleDomPoll(view: WebView?, attempt: Int) {
-        if (attempt >= DOM_POLL_MAX_ATTEMPTS || disposed.get() || completed.get() || view == null) return
+    fun scheduleDomPoll(view: WebView?, attempt: Int, token: Int = sessionToken.get()) {
+        if (attempt >= DOM_POLL_MAX_ATTEMPTS ||
+            token != sessionToken.get() ||
+            disposed.get() ||
+            completed.get() ||
+            view == null
+        ) return
         mainHandler.postDelayed({
-            if (disposed.get() || completed.get() || webViewHolder.ref !== view) return@postDelayed
+            if (token != sessionToken.get() || disposed.get() || completed.get() || webViewHolder.ref !== view) return@postDelayed
             try {
                 view.evaluateJavascript(SMART_CAPTURE_AND_AGREE_JS) { raw ->
+                    if (token != sessionToken.get() || disposed.get() || completed.get()) return@evaluateJavascript
                     val cleaned = raw?.trim()?.trim('"')?.replace("\\/", "/") ?: ""
-                    if (cleaned.contains("vanilla.shiro.dev/f/")) {
-                        tryCapture(cleaned)
-                    } else if (!completed.get()) {
-                        scheduleDomPoll(view, attempt + 1)
+                    when {
+                        cleaned.contains("vanilla.shiro.dev/f/") -> tryCapture(cleaned)
+                        cleaned == "CHALLENGE" -> {
+                            inCloudflareChallenge = true
+                            statusText = "检测到人机验证，请手动完成或使用 Custom Tabs 打开"
+                        }
+                        else -> scheduleDomPoll(view, attempt + 1, token)
                     }
                 }
             } catch (t: Throwable) {
@@ -565,8 +640,42 @@ fun ShortCodeCaptureDialog(
                     LowWebViewVersionBanner(
                         versionInfo = versionInfo,
                         onUpdatePlayStore = { openWebViewInPlayStore(context) },
-                        onOpenBrowser = { openInSystemBrowser(context, GameSourceResolver.OFFICIAL_WIN_URL) }
+                        onOpenBrowser = {
+                            sessionToken.incrementAndGet()
+                            mainHandler.removeCallbacksAndMessages(null)
+                            openInCustomTabsOrBrowser(context, GameSourceResolver.OFFICIAL_WIN_URL)
+                        }
                     )
+                }
+                if (inCloudflareChallenge) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "人机验证受阻？可用 Custom Tabs 完成验证后返回",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    sessionToken.incrementAndGet()
+                                    mainHandler.removeCallbacksAndMessages(null)
+                                    openInCustomTabsOrBrowser(context, GameSourceResolver.OFFICIAL_WIN_URL)
+                                }
+                            ) {
+                                Text(text = "Custom Tabs 打开")
+                            }
+                        }
+                    }
                 }
                 clipboardCandidate?.let { candidate ->
                     Surface(
@@ -639,9 +748,14 @@ fun ShortCodeCaptureDialog(
                                             ViewGroup.LayoutParams.MATCH_PARENT,
                                             ViewGroup.LayoutParams.MATCH_PARENT
                                         )
-                                        runCatching { CookieManager.getInstance().setAcceptCookie(true) }
+                                        runCatching {
+                                            CookieManager.getInstance().setAcceptCookie(true)
+                                            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                                        }
                                         settings.javaScriptEnabled = true
                                         settings.domStorageEnabled = true
+                                        @Suppress("DEPRECATION")
+                                        settings.databaseEnabled = true
                                         settings.userAgentString = DESKTOP_CHROME_UA
                                         settings.loadWithOverviewMode = true
                                         settings.useWideViewPort = true
@@ -662,10 +776,17 @@ fun ShortCodeCaptureDialog(
                                             }
                                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                 super.onPageStarted(view, url, favicon)
+                                                val isCf = isCloudflareChallengeUrl(url)
                                                 mainHandler.post {
-                                                    isLoading = true
-                                                    pageFinished = false
-                                                    loadErrorMessage = null
+                                                    if (!disposed.get()) {
+                                                        isLoading = true
+                                                        pageFinished = false
+                                                        loadErrorMessage = null
+                                                        if (isCf) {
+                                                            inCloudflareChallenge = true
+                                                            statusText = "检测到人机验证，请手动完成或使用 Custom Tabs 打开"
+                                                        }
+                                                    }
                                                 }
                                             }
 
@@ -676,7 +797,7 @@ fun ShortCodeCaptureDialog(
                                                 val u = request?.url?.toString().orEmpty()
                                                 if (tryCapture(u)) return true
                                                 val host = request?.url?.host?.lowercase().orEmpty()
-                                                return host.isNotEmpty() && host !in GameSourceResolver.ALLOWED_OFFICIAL_HOSTS
+                                                return !isAllowedNavigationHost(host)
                                             }
 
                                             override fun shouldInterceptRequest(
@@ -708,6 +829,8 @@ fun ShortCodeCaptureDialog(
                                             override fun onPageFinished(view: WebView?, url: String?) {
                                                 super.onPageFinished(view, url)
                                                 if (disposed.get()) return
+                                                flushWebViewCookies()
+                                                val isCf = isCloudflareChallengeUrl(url)
                                                 try {
                                                     view?.evaluateJavascript(VIEWPORT_UNLOCK_JS, null)
                                                     if (zoomPercent != DEFAULT_ZOOM_PERCENT) {
@@ -723,9 +846,15 @@ fun ShortCodeCaptureDialog(
                                                     if (!disposed.get()) {
                                                         pageFinished = true
                                                         isLoading = false
+                                                        if (isCf) {
+                                                            inCloudflareChallenge = true
+                                                            statusText = "检测到人机验证，请手动完成或使用 Custom Tabs 打开"
+                                                        }
                                                     }
                                                 }
-                                                scheduleDomPoll(view, 0)
+                                                if (!isCf) {
+                                                    scheduleDomPoll(view, 0, sessionToken.get())
+                                                }
                                             }
                                         }
                                         setDownloadListener { dlUrl, _, _, _, _ ->
@@ -793,7 +922,9 @@ fun ShortCodeCaptureDialog(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedButton(
                                         onClick = {
+                                            sessionToken.incrementAndGet()
                                             mainHandler.removeCallbacksAndMessages(null)
+                                            inCloudflareChallenge = false
                                             loadErrorMessage = null
                                             pageFinished = false
                                             isLoading = true
@@ -804,9 +935,13 @@ fun ShortCodeCaptureDialog(
                                         Text(text = "重试", color = Color.White)
                                     }
                                     OutlinedButton(
-                                        onClick = { openInSystemBrowser(context, GameSourceResolver.OFFICIAL_WIN_URL) }
+                                        onClick = {
+                                            sessionToken.incrementAndGet()
+                                            mainHandler.removeCallbacksAndMessages(null)
+                                            openInCustomTabsOrBrowser(context, GameSourceResolver.OFFICIAL_WIN_URL)
+                                        }
                                     ) {
-                                        Text(text = "去系统浏览器打开", color = Color.White)
+                                        Text(text = "Custom Tabs / 浏览器", color = Color.White)
                                     }
                                 }
                             }
@@ -919,6 +1054,8 @@ fun WebViewDownloadDialog(
                                         }
                                         settings.javaScriptEnabled = true
                                         settings.domStorageEnabled = true
+                                        @Suppress("DEPRECATION")
+                                        settings.databaseEnabled = true
                                         settings.userAgentString = DESKTOP_CHROME_UA
                                         settings.loadWithOverviewMode = true
                                         settings.useWideViewPort = true
@@ -939,6 +1076,7 @@ fun WebViewDownloadDialog(
                                             override fun onPageFinished(view: WebView?, url: String?) {
                                                 super.onPageFinished(view, url)
                                                 if (disposed.get()) return
+                                                flushWebViewCookies()
                                                 try {
                                                     view?.evaluateJavascript(VIEWPORT_UNLOCK_JS, null)
                                                 } catch (t: Throwable) {
@@ -1063,7 +1201,7 @@ fun WebViewDownloadDialog(
                                         Text(text = "重试", color = Color.White)
                                     }
                                     OutlinedButton(
-                                        onClick = { openInSystemBrowser(context, task.signedUrl) }
+                                        onClick = { openInCustomTabsOrBrowser(context, task.signedUrl) }
                                     ) {
                                         Text(text = "去系统浏览器打开", color = Color.White)
                                     }
