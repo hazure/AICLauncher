@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager as SystemCookieManager
 import android.webkit.WebResourceError as SystemWebResourceError
@@ -63,6 +64,7 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -88,14 +90,45 @@ private val AUTO_AGREE_JS = """
     })();
 """.trimIndent()
 
+private class WebViewHolder<T>(var ref: T? = null)
+
+private fun safeDestroyWebView(view: View?) {
+    when (view) {
+        is WebView -> {
+            try {
+                view.stopLoading()
+                view.setDownloadListener(null)
+                view.webViewClient = WebViewClient()
+                (view.parent as? ViewGroup)?.removeView(view)
+                view.removeAllViews()
+                view.destroy()
+            } catch (t: Throwable) {
+                Log.w("AICL_X5", "safeDestroyWebView(X5) failed", t)
+            }
+        }
+        is SystemWebView -> {
+            try {
+                view.stopLoading()
+                view.setDownloadListener(null)
+                view.webViewClient = SystemWebViewClient()
+                (view.parent as? ViewGroup)?.removeView(view)
+                view.removeAllViews()
+                view.destroy()
+            } catch (t: Throwable) {
+                Log.w("AICL_X5", "safeDestroyWebView(System) failed", t)
+            }
+        }
+    }
+}
+
 private fun openInSystemBrowser(context: Context, url: String) {
     try {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
-    } catch (e: Exception) {
-        Log.e("AICL_X5", "Failed to open system browser for $url", e)
+    } catch (t: Throwable) {
+        Log.e("AICL_X5", "Failed to open system browser for $url", t)
     }
 }
 
@@ -112,9 +145,14 @@ private fun streamDownloadToPartFile(
     onPartFileReady: (File) -> Unit,
     onFailed: (String) -> Unit
 ) {
-    CoroutineScope(Dispatchers.IO).launch {
-        val destFile = File(task.destFilePath)
-        val partFile = File(destFile.parentFile, "${destFile.name}.part")
+    val destFile = File(task.destFilePath)
+    val partFile = File(destFile.parentFile, "${destFile.name}.part")
+    val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e("AICL_X5", "Uncaught coroutine error in WebView download stream", throwable)
+        runCatching { partFile.delete() }
+        mainHandler.post { onFailed(throwable.message ?: "WebView 下载失败") }
+    }
+    CoroutineScope(Dispatchers.IO + exceptionHandler).launch {
         partFile.parentFile?.mkdirs()
         try {
             val conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
@@ -167,9 +205,10 @@ private fun streamDownloadToPartFile(
             } finally {
                 conn.disconnect()
             }
-        } catch (e: Exception) {
-            partFile.delete()
-            mainHandler.post { onFailed(e.message ?: "WebView 下载失败") }
+        } catch (t: Throwable) {
+            Log.e("AICL_X5", "WebView download stream failed", t)
+            runCatching { partFile.delete() }
+            mainHandler.post { onFailed(t.message ?: "WebView 下载失败") }
         }
     }
 }
@@ -220,8 +259,8 @@ fun ShortCodeCaptureDialog(
     var loadErrorMessage by remember { mutableStateOf<String?>(null) }
     val completed = remember { AtomicBoolean(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
-    var x5WebViewRef by remember { mutableStateOf<WebView?>(null) }
-    var sysWebViewRef by remember { mutableStateOf<SystemWebView?>(null) }
+    val x5WebViewHolder = remember { WebViewHolder<WebView>() }
+    val sysWebViewHolder = remember { WebViewHolder<SystemWebView>() }
 
     LaunchedEffect(x5Status) {
         if (x5Status != X5InitStatus.PENDING) {
@@ -258,23 +297,11 @@ fun ShortCodeCaptureDialog(
         }
         mainHandler.postDelayed(timeoutRunnable, GameSourceResolver.WEBVIEW_TIMEOUT_MS)
         onDispose {
-            mainHandler.removeCallbacks(timeoutRunnable)
-            runCatching {
-                x5WebViewRef?.apply {
-                    stopLoading()
-                    setDownloadListener(null)
-                    destroy()
-                }
-            }
-            runCatching {
-                sysWebViewRef?.apply {
-                    stopLoading()
-                    setDownloadListener(null)
-                    destroy()
-                }
-            }
-            x5WebViewRef = null
-            sysWebViewRef = null
+            mainHandler.removeCallbacksAndMessages(null)
+            safeDestroyWebView(x5WebViewHolder.ref)
+            safeDestroyWebView(sysWebViewHolder.ref)
+            x5WebViewHolder.ref = null
+            sysWebViewHolder.ref = null
         }
     }
 
@@ -423,7 +450,7 @@ fun ShortCodeCaptureDialog(
                                                         tryCapture(dlUrl)
                                                     }
                                                 }
-                                                x5WebViewRef = this
+                                                x5WebViewHolder.ref = this
                                                 loadUrl(GameSourceResolver.OFFICIAL_WIN_URL)
                                             }
                                         } catch (t: Throwable) {
@@ -432,6 +459,10 @@ fun ShortCodeCaptureDialog(
                                             mainHandler.post { x5RuntimeFailed = true }
                                             android.view.View(ctx)
                                         }
+                                    },
+                                    onRelease = { released ->
+                                        if (x5WebViewHolder.ref === released) x5WebViewHolder.ref = null
+                                        safeDestroyWebView(released)
                                     }
                                 )
                             } else {
@@ -514,7 +545,7 @@ fun ShortCodeCaptureDialog(
                                                         tryCapture(dlUrl)
                                                     }
                                                 }
-                                                sysWebViewRef = this
+                                                sysWebViewHolder.ref = this
                                                 loadUrl(GameSourceResolver.OFFICIAL_WIN_URL)
                                             }
                                         } catch (t: Throwable) {
@@ -525,6 +556,10 @@ fun ShortCodeCaptureDialog(
                                             }
                                             android.view.View(ctx)
                                         }
+                                    },
+                                    onRelease = { released ->
+                                        if (sysWebViewHolder.ref === released) sysWebViewHolder.ref = null
+                                        safeDestroyWebView(released)
                                     }
                                 )
                             }
@@ -572,22 +607,7 @@ fun ShortCodeCaptureDialog(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedButton(
                                         onClick = {
-                                            runCatching {
-                                                x5WebViewRef?.apply {
-                                                    stopLoading()
-                                                    setDownloadListener(null)
-                                                    destroy()
-                                                }
-                                            }
-                                            runCatching {
-                                                sysWebViewRef?.apply {
-                                                    stopLoading()
-                                                    setDownloadListener(null)
-                                                    destroy()
-                                                }
-                                            }
-                                            x5WebViewRef = null
-                                            sysWebViewRef = null
+                                            mainHandler.removeCallbacksAndMessages(null)
                                             loadErrorMessage = null
                                             pageFinished = false
                                             isLoading = true
@@ -646,8 +666,8 @@ fun WebViewDownloadDialog(
     val startedDownload = remember { AtomicBoolean(false) }
     val cancelled = remember { AtomicBoolean(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
-    var x5WebViewRef by remember { mutableStateOf<WebView?>(null) }
-    var sysWebViewRef by remember { mutableStateOf<SystemWebView?>(null) }
+    val x5WebViewHolder = remember { WebViewHolder<WebView>() }
+    val sysWebViewHolder = remember { WebViewHolder<SystemWebView>() }
 
     LaunchedEffect(x5Status) {
         if (x5Status != X5InitStatus.PENDING) {
@@ -681,22 +701,11 @@ fun WebViewDownloadDialog(
         }
         onDispose {
             cancelled.set(true)
-            runCatching {
-                x5WebViewRef?.apply {
-                    stopLoading()
-                    setDownloadListener(null)
-                    destroy()
-                }
-            }
-            runCatching {
-                sysWebViewRef?.apply {
-                    stopLoading()
-                    setDownloadListener(null)
-                    destroy()
-                }
-            }
-            x5WebViewRef = null
-            sysWebViewRef = null
+            mainHandler.removeCallbacksAndMessages(null)
+            safeDestroyWebView(x5WebViewHolder.ref)
+            safeDestroyWebView(sysWebViewHolder.ref)
+            x5WebViewHolder.ref = null
+            sysWebViewHolder.ref = null
         }
     }
 
@@ -819,7 +828,7 @@ fun WebViewDownloadDialog(
                                                         onFailed = onFailed
                                                     )
                                                 }
-                                                x5WebViewRef = this
+                                                x5WebViewHolder.ref = this
                                                 loadUrl(task.signedUrl)
                                             }
                                         } catch (t: Throwable) {
@@ -828,6 +837,10 @@ fun WebViewDownloadDialog(
                                             mainHandler.post { x5RuntimeFailed = true }
                                             android.view.View(ctx)
                                         }
+                                    },
+                                    onRelease = { released ->
+                                        if (x5WebViewHolder.ref === released) x5WebViewHolder.ref = null
+                                        safeDestroyWebView(released)
                                     }
                                 )
                             } else {
@@ -904,7 +917,7 @@ fun WebViewDownloadDialog(
                                                         onFailed = onFailed
                                                     )
                                                 }
-                                                sysWebViewRef = this
+                                                sysWebViewHolder.ref = this
                                                 loadUrl(task.signedUrl)
                                             }
                                         } catch (t: Throwable) {
@@ -916,6 +929,10 @@ fun WebViewDownloadDialog(
                                             }
                                             android.view.View(ctx)
                                         }
+                                    },
+                                    onRelease = { released ->
+                                        if (sysWebViewHolder.ref === released) sysWebViewHolder.ref = null
+                                        safeDestroyWebView(released)
                                     }
                                 )
                             }
@@ -963,22 +980,7 @@ fun WebViewDownloadDialog(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedButton(
                                         onClick = {
-                                            runCatching {
-                                                x5WebViewRef?.apply {
-                                                    stopLoading()
-                                                    setDownloadListener(null)
-                                                    destroy()
-                                                }
-                                            }
-                                            runCatching {
-                                                sysWebViewRef?.apply {
-                                                    stopLoading()
-                                                    setDownloadListener(null)
-                                                    destroy()
-                                                }
-                                            }
-                                            x5WebViewRef = null
-                                            sysWebViewRef = null
+                                            mainHandler.removeCallbacksAndMessages(null)
                                             loadErrorMessage = null
                                             pageFinished = false
                                             isLoading = true

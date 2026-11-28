@@ -8,6 +8,10 @@ import android.util.Log
 import com.tencent.smtt.export.external.TbsCoreSettings
 import com.tencent.smtt.sdk.QbSdk
 import com.tencent.smtt.sdk.TbsPrivacyAccess
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,10 +45,21 @@ class AiclApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        installCrashSummaryHandler()
+
+        if (!hasBundledX5NativeLibrary()) {
+            runCatching { QbSdk.forceSysWebView() }
+                .onFailure { Log.w("AICL_X5", "QbSdk.forceSysWebView failed", it) }
+            X5EngineState.update(X5InitStatus.FALLBACK_SYSTEM)
+            Log.i("AICL_X5", "X5 init FALLBACK: no bundled X5 native library detected, using system WebView")
+            return
+        }
+
         Handler(x5InitThread.looper).post {
             try {
                 Log.i("AICL_X5", "X5 async init started")
                 runCatching { TbsPrivacyAccess.disableSensitiveApi() }
+                    .onFailure { Log.w("AICL_X5", "TbsPrivacyAccess.disableSensitiveApi failed", it) }
                 try {
                     val setAgreementMethod = QbSdk::class.java.getMethod(
                         "setUserAgreement",
@@ -61,12 +76,12 @@ class AiclApplication : Application() {
                 runCatching {
                     QbSdk.initTbsSettings(
                         mapOf(
-                            TbsCoreSettings.TBS_SETTINGS_USE_SPEEDY_CLASSLOADER to true,
-                            TbsCoreSettings.TBS_SETTINGS_USE_DEXLOADER_SERVICE to true
+                            TbsCoreSettings.TBS_SETTINGS_USE_SPEEDY_CLASSLOADER to true
                         )
                     )
-                }
+                }.onFailure { Log.w("AICL_X5", "QbSdk.initTbsSettings failed", it) }
                 runCatching { QbSdk.setDownloadWithoutWifi(true) }
+                    .onFailure { Log.w("AICL_X5", "QbSdk.setDownloadWithoutWifi failed", it) }
                 QbSdk.initX5Environment(
                     applicationContext,
                     object : QbSdk.PreInitCallback {
@@ -92,8 +107,57 @@ class AiclApplication : Application() {
             } catch (t: Throwable) {
                 Log.e("AICL_X5", "X5 init FALLBACK: exception during async init", t)
                 runCatching { QbSdk.forceSysWebView() }
+                    .onFailure { Log.w("AICL_X5", "QbSdk.forceSysWebView failed during fallback", it) }
                 X5EngineState.update(X5InitStatus.FALLBACK_SYSTEM)
             }
+        }
+    }
+
+    private fun hasBundledX5NativeLibrary(): Boolean {
+        return try {
+            val nativeDir = applicationContext.applicationInfo?.nativeLibraryDir ?: return false
+            val files = File(nativeDir).listFiles() ?: return false
+            files.any { file ->
+                val name = file.name.lowercase(Locale.US)
+                name.endsWith(".so") && (name.contains("tbs") || name.contains("x5"))
+            }
+        } catch (t: Throwable) {
+            Log.w("AICL_X5", "Failed probing nativeLibraryDir for X5 .so", t)
+            false
+        }
+    }
+
+    private fun installCrashSummaryHandler() {
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                if (thread.name.contains("tbs", ignoreCase = true) ||
+                    thread.name.contains("x5", ignoreCase = true)
+                ) {
+                    X5EngineState.markRuntimeFallback()
+                }
+                val diagDir = File(applicationContext.filesDir, "diagnostics")
+                if (!diagDir.exists()) {
+                    diagDir.mkdirs()
+                }
+                val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())
+                val topFrames = throwable.stackTrace.take(15).joinToString("\n") { "  at $it" }
+                val causeLine = throwable.cause?.let { c ->
+                    "Cause: ${c.javaClass.name}: ${c.message.orEmpty()}"
+                } ?: "Cause: none"
+                val summary = buildString {
+                    appendLine("Timestamp: $timestamp")
+                    appendLine("Thread: ${thread.name}")
+                    appendLine("Exception: ${throwable.javaClass.name}: ${throwable.message.orEmpty()}")
+                    appendLine(causeLine)
+                    appendLine("StackTrace (top 15):")
+                    appendLine(topFrames)
+                }
+                File(diagDir, "last_crash_summary.txt").writeText(summary, Charsets.UTF_8)
+            } catch (t: Throwable) {
+                Log.e("AICL_CRASH", "Failed to persist crash summary", t)
+            }
+            previousHandler?.uncaughtException(thread, throwable)
         }
     }
 }

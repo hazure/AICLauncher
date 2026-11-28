@@ -172,9 +172,9 @@ class GameSourceResolver(
 
         val direct = try {
             directFetcher()
-        } catch (e: Exception) {
-            SafeProbeIo.warn(TAG, "Direct source resolution failed: ${e.message}", e)
-            pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=EXCEPTION sourceKind=direct_api reason=${e.message}")
+        } catch (t: Throwable) {
+            SafeProbeIo.warn(TAG, "Direct source resolution failed: ${t.message}", t)
+            pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=EXCEPTION sourceKind=direct_api reason=${t.message}")
             null
         }
         if (direct != null && direct.url.isNotBlank()) {
@@ -189,9 +189,9 @@ class GameSourceResolver(
         if (context != null) {
             val webViewResult = try {
                 webViewFetcher(context)
-            } catch (e: Exception) {
-                SafeProbeIo.warn(TAG, "WebView fallback resolution failed: ${e.message}", e)
-                pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=EXCEPTION sourceKind=webview_fallback reason=${e.message}")
+            } catch (t: Throwable) {
+                SafeProbeIo.warn(TAG, "WebView fallback resolution failed: ${t.message}", t)
+                pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=EXCEPTION sourceKind=webview_fallback reason=${t.message}")
                 null
             }
             if (webViewResult != null && webViewResult.url.isNotBlank()) {
@@ -375,6 +375,9 @@ class GameSourceResolver(
                                 webViewRef?.apply {
                                     stopLoading()
                                     setDownloadListener(null)
+                                    webViewClient = WebViewClient()
+                                    (parent as? android.view.ViewGroup)?.removeView(this)
+                                    removeAllViews()
                                     destroy()
                                 }
                             }
@@ -456,8 +459,8 @@ class GameSourceResolver(
                                 }
                             }
                             wv.loadUrl(OFFICIAL_WIN_URL)
-                        } catch (e: Exception) {
-                            SafeProbeIo.warn(TAG, "WebView initialization failed: ${e.message}", e)
+                        } catch (t: Throwable) {
+                            SafeProbeIo.warn(TAG, "WebView initialization failed: ${t.message}", t)
                             finish(null)
                         }
                     }
