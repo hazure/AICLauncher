@@ -81,6 +81,7 @@ fun GeckoCaptureDialog(
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var diagnosticLines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var useDesktopUaOverride by remember { mutableStateOf(true) }
 
     fun appendDiagnostic(line: String) {
         Log.w("AICL_GECKO", "DIAG $line")
@@ -88,7 +89,7 @@ fun GeckoCaptureDialog(
         mainHandler.post {
             if (!disposed.get()) {
                 if (diagnosticLines.lastOrNull() != line) {
-                    diagnosticLines = (diagnosticLines + line).takeLast(8)
+                    diagnosticLines = (diagnosticLines + line).takeLast(12)
                 }
             }
         }
@@ -111,6 +112,31 @@ fun GeckoCaptureDialog(
             }
         } catch (t: Throwable) {
             Log.w("AICL_GECKO", "Failed activating GeckoSession", t)
+        }
+    }
+
+    fun applyUaModeAndReload(session: GeckoSession, desktopOverride: Boolean) {
+        try {
+            if (desktopOverride) {
+                val desktopUa = GeckoDesktopIdentity.buildDesktopFirefoxUserAgent()
+                session.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+                session.settings.viewportMode = GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+                session.settings.userAgentOverride = desktopUa
+            } else {
+                session.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+                session.settings.viewportMode = GeckoSessionSettings.VIEWPORT_MODE_MOBILE
+                session.settings.userAgentOverride = null
+            }
+            diagnosticLines = emptyList()
+            errorMessage = null
+            isLoading = true
+            appendDiagnostic("[ua_mode] desktopOverride=$desktopOverride")
+            activateSession(session, viewHolder.ref)
+            session.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
+        } catch (t: Throwable) {
+            Log.e("AICL_GECKO", "Failed switching GeckoSession UA mode", t)
+            errorMessage = "切换 UA 失败，请重试"
+            isLoading = false
         }
     }
 
@@ -389,8 +415,23 @@ fun GeckoCaptureDialog(
                     text = "应用内下载验证（Gecko）",
                     style = MaterialTheme.typography.titleMedium
                 )
-                TextButton(onClick = onDismiss) {
-                    Text(text = "取消")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = {
+                            val next = !useDesktopUaOverride
+                            useDesktopUaOverride = next
+                            sessionHolder.ref?.let { applyUaModeAndReload(it, next) }
+                        }
+                    ) {
+                        Text(
+                            text = if (useDesktopUaOverride) "切原生UA" else "切桌面UA",
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(text = "取消", maxLines = 1, softWrap = false)
+                    }
                 }
             }
             Text(
@@ -408,7 +449,7 @@ fun GeckoCaptureDialog(
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 110.dp)
+                        .heightIn(max = 140.dp)
                 ) {
                     Column(
                         modifier = Modifier

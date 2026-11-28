@@ -11,6 +11,10 @@
     } catch (_) {}
   }
 
+  function shortPath(u) {
+    return String(u || "").replace("https://get.aliceincradle.dev", "");
+  }
+
   try {
     send(
       "diag_env",
@@ -21,16 +25,6 @@
         " vp=" + window.innerWidth + "x" + window.innerHeight +
         " dpr=" + window.devicePixelRatio
     );
-  } catch (_) {}
-
-  try {
-    document.addEventListener("visibilitychange", function () {
-      send(
-        "vis_change",
-        location.href,
-        "vis=" + document.visibilityState + " hidden=" + document.hidden + " focus=" + document.hasFocus()
-      );
-    });
   } catch (_) {}
 
   try {
@@ -62,34 +56,90 @@
         var t = ev && ev.target;
         if (t && t !== window && t.tagName) {
           var u = t.currentSrc || t.src || t.href || "";
-          var d = t.tagName + " complete=" + t.complete + " nw=" + t.naturalWidth + " nh=" + t.naturalHeight;
-          send("dom_error", u, d);
+          var d = t.tagName + " c=" + t.complete + " nw=" + t.naturalWidth + " nh=" + t.naturalHeight;
+          send("dom_error", shortPath(u), d);
         }
       } catch (_) {}
     },
     true
   );
 
-  window.addEventListener("message", function (ev) {
+  function runAudit(tag) {
     try {
-      if (ev && ev.source === window && ev.data && ev.data.__aiclDiag === true) {
-        send(ev.data.kind, ev.data.url, ev.data.detail);
+      var res = (performance && performance.getEntriesByType) ? (performance.getEntriesByType("resource") || []) : [];
+      var imgRes = [];
+      var badImgRes = [];
+      var badOtherRes = [];
+      for (var i = 0; i < res.length; i++) {
+        var e = res[i];
+        var name = String(e.name || "");
+        var st = typeof e.responseStatus === "number" ? e.responseStatus : -1;
+        var tr = typeof e.transferSize === "number" ? e.transferSize : -1;
+        var db = typeof e.decodedBodySize === "number" ? e.decodedBodySize : -1;
+        if (name.indexOf("/_img/") !== -1) {
+          imgRes.push(e);
+          if ((st !== -1 && st !== 200) || (tr === 0 && db === 0)) {
+            badImgRes.push(shortPath(name) + "(st=" + st + ",tr=" + tr + ",db=" + db + ")");
+          }
+        } else if (st !== -1 && st !== 200) {
+          badOtherRes.push(shortPath(name) + "(st=" + st + ")");
+        }
       }
-    } catch (_) {}
-  });
+
+      var imgs = Array.prototype.slice.call(document.images || []);
+      var brokenDom = [];
+      for (var j = 0; j < imgs.length; j++) {
+        var img = imgs[j];
+        if (!img.complete || img.naturalWidth === 0) {
+          brokenDom.push(
+            shortPath(img.currentSrc || img.src) + "(c=" + img.complete + ",nw=" + img.naturalWidth + ",nh=" + img.naturalHeight + ")"
+          );
+        }
+      }
+
+      var hasErrText = !!(
+        document.body &&
+        document.body.innerText &&
+        document.body.innerText.indexOf("Some images could not be loaded") !== -1
+      );
+      var uaTag = navigator.userAgent.indexOf("Android") !== -1 ? "Android" : "Win";
+      send(
+        tag,
+        "imgRes=" + imgRes.length + " badRes=" + badImgRes.length + " domImg=" + imgs.length + " nw0=" + brokenDom.length + " errText=" + hasErrText,
+        "ua=" + uaTag + " vis=" + document.visibilityState
+      );
+      if (badImgRes.length > 0) {
+        send(tag + "_bad_res", "", badImgRes.slice(0, 6).join("; "));
+      }
+      if (brokenDom.length > 0) {
+        send(tag + "_nw0", "", brokenDom.slice(0, 6).join("; "));
+      }
+      if (badOtherRes.length > 0) {
+        send(tag + "_other", "", badOtherRes.slice(0, 4).join("; "));
+      }
+    } catch (err) {
+      send(tag + "_err", "", err && err.message ? err.message : String(err));
+    }
+  }
+
+  setTimeout(function () { runAudit("audit_3s"); }, 3000);
+  setTimeout(function () { runAudit("audit_6s"); }, 6000);
+  setTimeout(function () { runAudit("audit_9s"); }, 9000);
 
   try {
-    var script = document.createElement("script");
-    script.textContent =
-      "(function(){" +
-      "function emit(kind,url,detail){try{window.postMessage({__aiclDiag:true,kind:kind,url:String(url||''),detail:String(detail||'')},'*');}catch(_){}}" +
-      "try{var origDecode=HTMLImageElement.prototype.decode;if(origDecode){HTMLImageElement.prototype.decode=function(){var self=this;return origDecode.apply(this,arguments).catch(function(e){emit('img_decode_err',self.currentSrc||self.src,(e&&e.message?e.message:String(e))+' complete='+self.complete+' nw='+self.naturalWidth+' nh='+self.naturalHeight);throw e;});};}}catch(_){}" +
-      "try{var OrigImg=window.Image;if(OrigImg){var WrappedImg=function(w,h){var img=arguments.length===0?new OrigImg():arguments.length===1?new OrigImg(w):new OrigImg(w,h);try{img.addEventListener('error',function(){emit('new_img_err',img.currentSrc||img.src,'complete='+img.complete+' nw='+img.naturalWidth+' nh='+img.naturalHeight);});}catch(_){}return img;};WrappedImg.prototype=OrigImg.prototype;window.Image=WrappedImg;}}catch(_){}" +
-      "try{var origFetch=window.fetch;if(origFetch){window.fetch=function(input,init){var u=typeof input==='string'?input:(input&&input.url)||'';return origFetch.apply(this,arguments).then(function(res){if(!res.ok){emit('fetch_err',res.url||u,'status='+res.status);}return res;}).catch(function(e){emit('fetch_err',u,e&&e.message?e.message:String(e));throw e;});};}}catch(_){}" +
-      "try{var origErr=console.error;console.error=function(){try{var msg=Array.prototype.slice.call(arguments).map(function(x){return typeof x==='string'?x:(x&&x.message?x.message:String(x));}).join(' ');emit('console_err',location.href,msg.slice(0,220));}catch(_){}return origErr.apply(this,arguments);};}catch(_){}" +
-      "window.addEventListener('unhandledrejection',function(ev){try{var r=ev&&ev.reason;emit('rejection',location.href,r&&r.message?r.message:String(r));}catch(_){}});" +
-      "})();";
-    (document.documentElement || document.head || document).appendChild(script);
-    script.remove();
+    var errReported = false;
+    var obs = new MutationObserver(function () {
+      if (errReported) return;
+      if (
+        document.body &&
+        document.body.innerText &&
+        document.body.innerText.indexOf("Some images could not be loaded") !== -1
+      ) {
+        errReported = true;
+        obs.disconnect();
+        runAudit("audit_err");
+      }
+    });
+    obs.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   } catch (_) {}
 })();
