@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -96,43 +98,114 @@ jobs:
               body
             });
 
-      - name: Publish GitHub Release on dev/main push
+      - name: Publish formal GitHub Release on dev/main push
         if: >-
           success() &&
           github.event_name == 'push' &&
           (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
         env:
           GH_TOKEN: ${{ secrets.BOT_PAT || secrets.GITHUB_TOKEN }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          GRADLE_FILE="client/android/app/build.gradle.kts"
-          VERSION_NAME=$(grep -E 'versionName\s*=' "$GRADLE_FILE" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
-          VERSION_CODE=$(grep -E 'versionCode\s*=' "$GRADLE_FILE" | head -n 1 | sed -E 's/[^0-9]//g')
-          SHORT_SHA="${GITHUB_SHA::7}"
-          APK_SRC="client/android/app/build/outputs/apk/debug/app-debug.apk"
+          python3 - <<'PY'
+          import glob, json, os, re, shutil, subprocess, sys
 
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAG="v${VERSION_NAME}"
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              TAG="v${VERSION_NAME}-vc${VERSION_CODE}"
-            fi
-            APK_NAME="AICL_v${VERSION_NAME}_vc${VERSION_CODE}.apk"
-            PRERELEASE_FLAG=""
-            TITLE="AICLauncher ${TAG}"
-          else
-            TAG="dev-v${VERSION_NAME}-vc${VERSION_CODE}"
-            APK_NAME="AICL_dev_v${VERSION_NAME}_vc${VERSION_CODE}_${SHORT_SHA}.apk"
-            PRERELEASE_FLAG="--prerelease"
-            TITLE="AICLauncher ${TAG} (${SHORT_SHA})"
-          fi
+          apk_src = "client/android/app/build/outputs/apk/debug/app-debug.apk"
+          gradle_file = "client/android/app/build.gradle.kts"
+          repo = os.environ["GITHUB_REPOSITORY"]
+          head_sha = os.environ["GITHUB_SHA"]
+          before_sha = os.environ.get("BEFORE_SHA", "")
 
-          cp "$APK_SRC" "$APK_NAME"
+          if not before_sha or set(before_sha) == {"0"}:
+              before_sha = subprocess.check_output(["git", "rev-parse", "HEAD~1"], text=True).strip()
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK_NAME" --clobber
-          else
-            gh release create "$TAG" "$APK_NAME" \
-              --title "$TITLE" \
-              --target "$GITHUB_SHA" \
-              --generate-notes \
-              $PRERELEASE_FLAG
-          fi
+          # 1. Only release when client/android/ actually changed AND versionCode increased
+          changed = subprocess.check_output(
+              ["git", "diff", "--name-only", before_sha, head_sha], text=True
+          ).splitlines()
+          if not any(p.startswith("client/android/") for p in changed):
+              print("Skip release: no changes under client/android/.")
+              sys.exit(0)
+
+          def parse_gradle_ver(txt):
+              vc_m = re.search(r"versionCode\s*=\s*(\d+)", txt)
+              vn_m = re.search(r'versionName\s*=\s*"([^"]+)"', txt)
+              return (int(vc_m.group(1)) if vc_m else 0, vn_m.group(1) if vn_m else "")
+
+          prev_gradle = subprocess.check_output(
+              ["git", "show", f"{before_sha}:{gradle_file}"], text=True
+          )
+          cur_gradle = open(gradle_file, encoding="utf-8").read()
+          prev_vc, _ = parse_gradle_ver(prev_gradle)
+          gradle_vc, gradle_vn = parse_gradle_ver(cur_gradle)
+          if gradle_vc <= prev_vc:
+              print(f"Skip release: versionCode did not advance ({prev_vc} -> {gradle_vc}).")
+              sys.exit(0)
+
+          # 2. Read real versionName/versionCode from built APK via aapt2 dump badging
+          sdk_root = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME") or "/usr/local/lib/android/sdk"
+          aapt2_candidates = sorted(glob.glob(os.path.join(sdk_root, "build-tools", "*", "aapt2")))
+          if not aapt2_candidates:
+              raise RuntimeError(f"aapt2 not found under {sdk_root}/build-tools")
+          aapt2 = aapt2_candidates[-1]
+          badging = subprocess.check_output([aapt2, "dump", "badging", apk_src], text=True)
+          m_vc = re.search(r"versionCode='(\d+)'", badging)
+          m_vn = re.search(r"versionName='([^']+)'", badging)
+          if not m_vc or not m_vn:
+              raise RuntimeError(f"Failed parsing versionCode/versionName from aapt2 output:\n{badging[:500]}")
+          apk_vc = int(m_vc.group(1))
+          apk_vn = m_vn.group(1)
+
+          if apk_vc != gradle_vc or apk_vn != gradle_vn:
+              raise RuntimeError(
+                  f"APK metadata mismatch: aapt2=({apk_vn}, {apk_vc}) vs build.gradle.kts=({gradle_vn}, {gradle_vc})"
+              )
+
+          clean_vn = apk_vn[1:] if apk_vn.startswith("v") else apk_vn
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+[a-z]", clean_vn):
+              raise RuntimeError(
+                  f"Non-compliant versionName '{apk_vn}' (normalized '{clean_vn}'): must match ^[0-9]+\\.[0-9]+\\.[0-9]+[a-z]$"
+              )
+
+          # 3. Prevent lower versionCode from superseding existing releases
+          releases_raw = subprocess.check_output(
+              ["gh", "api", f"repos/{repo}/releases?per_page=100"], text=True
+          )
+          releases = json.loads(releases_raw)
+          max_vc = 0
+          existing_tags = set()
+          for rel in releases:
+              t = rel.get("tag_name") or ""
+              existing_tags.add(t)
+              m_t = re.search(r"-vc(\d+)$", t)
+              if m_t:
+                  max_vc = max(max_vc, int(m_t.group(1)))
+              for asset in rel.get("assets", []):
+                  m_a = re.search(r"_vc(\d+)\.apk$", asset.get("name", ""))
+                  if m_a:
+                      max_vc = max(max_vc, int(m_a.group(1)))
+          if apk_vc < max_vc:
+              raise RuntimeError(f"Anti-downgrade guard: apk versionCode {apk_vc} < max released vc{max_vc}")
+
+          remote_tags = subprocess.check_output(["git", "ls-remote", "--tags", "origin"], text=True)
+          tag = f"v{clean_vn}"
+          if tag in existing_tags or f"refs/tags/{tag}" in remote_tags:
+              tag = f"v{clean_vn}-vc{apk_vc}"
+
+          apk_name = f"AICL_v{clean_vn}_vc{apk_vc}.apk"
+          shutil.copy2(apk_src, apk_name)
+
+          if tag in existing_tags:
+              subprocess.run(["gh", "release", "upload", tag, apk_name, "--clobber"], check=True)
+          else:
+              subprocess.run(
+                  [
+                      "gh", "release", "create", tag, apk_name,
+                      "--title", f"AICLauncher {tag}",
+                      "--target", head_sha,
+                      "--generate-notes",
+                  ],
+                  check=True,
+              )
+          print(f"Published formal release {tag} with {apk_name}")
+          PY
