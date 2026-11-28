@@ -793,7 +793,7 @@ fun SettingsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "用于验证 302 刷签名链路或 WebView 捕获失败时兜底",
+                        text = "用于验证 302 刷签名链路或外部浏览器捕获兜底",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

@@ -47,19 +47,6 @@ data class DownloadFilterState(
     val categoryOptions: List<String> = listOf("全部类别", "武器强化", "游戏本体", "UI 优化")
 )
 
-data class WebViewDownloadTask(
-    val itemId: String,
-    @Transient val signedUrl: String,
-    val destFilePath: String,
-    val expectedBytes: Long = 0L,
-    val expectedSha256: String? = null,
-    val urlFp: String
-) {
-    override fun toString(): String {
-        return "WebViewDownloadTask(itemId=$itemId, destFilePath=$destFilePath, expectedBytes=$expectedBytes, urlFp=$urlFp)"
-    }
-}
-
 data class DownloadPageState(
     val filter: DownloadFilterState = DownloadFilterState(),
     val statsText: String = "正在拉取远端资源列表...",
@@ -68,8 +55,7 @@ data class DownloadPageState(
     val selectedDetailItem: DownloadCatalogItem? = null,
     val isLoadingCatalog: Boolean = false,
     val catalogError: String? = null,
-    val pendingCaptureItemId: String? = null,
-    val pendingWebViewDownload: WebViewDownloadTask? = null
+    val pendingCaptureItemId: String? = null
 ) {
     val activeDownloadCount: Int
         get() = allItems.count {

@@ -1,16 +1,8 @@
 package com.aliceincradle.launcher.bridge
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import com.aliceincradle.launcher.data.SafeProbeIo
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -21,12 +13,8 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.Properties
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 enum class SourceKind {
     DIRECT_API,
@@ -143,7 +131,6 @@ fun interface ShortLinkRedirectFetcher {
 
 class GameSourceResolver(
     private val directFetcher: suspend () -> GameSource? = { fetchDirectFromOfficial() },
-    private val webViewFetcher: suspend (Context) -> GameSource? = { ctx -> fetchViaOfficialWebView(ctx) },
     private val shortLinkRedirectFetcher: ShortLinkRedirectFetcher = ShortLinkRedirectFetcher { shortUrl ->
         fetchShortLinkRedirect(shortUrl)
     },
@@ -184,24 +171,6 @@ class GameSourceResolver(
                     "oldFp=${oldFp ?: "none"} newFp=${urlFingerprint(direct.url)} signedUrlFpOnly=true elapsedMs=${clockMs() - startMs}"
             )
             return direct
-        }
-
-        if (context != null) {
-            val webViewResult = try {
-                webViewFetcher(context)
-            } catch (t: Throwable) {
-                SafeProbeIo.warn(TAG, "WebView fallback resolution failed: ${t.message}", t)
-                pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=EXCEPTION sourceKind=webview_fallback reason=${t.message}")
-                null
-            }
-            if (webViewResult != null && webViewResult.url.isNotBlank()) {
-                cacheMetadata(webViewResult)
-                pipelineLogger(
-                    "AICL_PIPELINE phase=RESOLVE_EXIT status=OK sourceKind=${webViewResult.sourceKind.name.lowercase()} " +
-                        "oldFp=${oldFp ?: "none"} newFp=${urlFingerprint(webViewResult.url)} signedUrlFpOnly=true elapsedMs=${clockMs() - startMs}"
-                )
-                return webViewResult
-            }
         }
 
         pipelineLogger("AICL_PIPELINE phase=RESOLVE_EXIT status=SHORTCODE_MISSING sourceKind=none elapsedMs=${clockMs() - startMs}")
@@ -264,7 +233,6 @@ class GameSourceResolver(
             "dl.aliceincradle.dev"
         )
         const val METADATA_TTL_MS = 10L * 60L * 1000L
-        const val WEBVIEW_TIMEOUT_MS = 20_000L
         private const val CHROME_UA =
             "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
@@ -355,116 +323,6 @@ class GameSourceResolver(
                 )
             } finally {
                 conn.disconnect()
-            }
-        }
-
-        @SuppressLint("SetJavaScriptEnabled")
-        private suspend fun fetchViaOfficialWebView(context: Context): GameSource? {
-            return withTimeoutOrNull(WEBVIEW_TIMEOUT_MS) {
-                suspendCancellableCoroutine<GameSource?> { cont ->
-                    val mainHandler = Handler(Looper.getMainLooper())
-                    val completed = AtomicBoolean(false)
-                    var webViewRef: WebView? = null
-                    val runnables = mutableListOf<Runnable>()
-
-                    fun destroyOnMain() {
-                        mainHandler.post {
-                            runnables.forEach { mainHandler.removeCallbacks(it) }
-                            runnables.clear()
-                            runCatching {
-                                webViewRef?.apply {
-                                    stopLoading()
-                                    setDownloadListener(null)
-                                    webViewClient = WebViewClient()
-                                    (parent as? android.view.ViewGroup)?.removeView(this)
-                                    removeAllViews()
-                                    destroy()
-                                }
-                            }
-                            webViewRef = null
-                        }
-                    }
-
-                    fun finish(result: GameSource?) {
-                        if (completed.compareAndSet(false, true)) {
-                            destroyOnMain()
-                            if (cont.isActive) cont.resume(result)
-                        }
-                    }
-
-                    cont.invokeOnCancellation {
-                        completed.set(true)
-                        destroyOnMain()
-                    }
-
-                    mainHandler.post {
-                        try {
-                            val wv = WebView(context.applicationContext)
-                            webViewRef = wv
-                            wv.settings.apply {
-                                javaScriptEnabled = true
-                                domStorageEnabled = true
-                                userAgentString = CHROME_UA
-                                loadsImagesAutomatically = false
-                                blockNetworkImage = true
-                            }
-                            wv.setDownloadListener { url, _, _, _, _ ->
-                                if (!url.isNullOrBlank()) {
-                                    val name = url.substringAfterLast('/').substringBefore('?')
-                                        .ifBlank { "AliceInCradle_Win_Latest.7z" }
-                                    finish(GameSource(url = url, sourceKind = SourceKind.WEBVIEW_FALLBACK, fileName = name))
-                                }
-                            }
-                            wv.webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                    val u = request?.url?.toString().orEmpty()
-                                    val clean = u.substringBefore('?').lowercase()
-                                    if (clean.endsWith(".7z") || clean.endsWith(".zip")) {
-                                        val name = u.substringAfterLast('/').substringBefore('?')
-                                        finish(GameSource(url = u, sourceKind = SourceKind.WEBVIEW_FALLBACK, fileName = name))
-                                        return true
-                                    }
-                                    val host = request?.url?.host?.lowercase().orEmpty()
-                                    return host.isNotEmpty() && host !in ALLOWED_OFFICIAL_HOSTS
-                                }
-
-                                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                                    val u = request?.url?.toString().orEmpty()
-                                    val clean = u.substringBefore('?').lowercase()
-                                    if (clean.endsWith(".7z") || clean.endsWith(".zip")) {
-                                        val name = u.substringAfterLast('/').substringBefore('?')
-                                        finish(GameSource(url = u, sourceKind = SourceKind.WEBVIEW_FALLBACK, fileName = name))
-                                        return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                                    }
-                                    return super.shouldInterceptRequest(view, request)
-                                }
-
-                                override fun onPageFinished(view: WebView?, url: String?) {
-                                    super.onPageFinished(view, url)
-                                    listOf(1_200L, 3_000L, 6_000L).forEach { delayMs ->
-                                        val r = Runnable {
-                                            if (completed.get()) return@Runnable
-                                            val js = """
-                                                (function() {
-                                                    if (window.__aiclClicked) return;
-                                                    var btn = document.querySelector('button[data-action="downloadWin"]');
-                                                    if (btn) { window.__aiclClicked = true; btn.click(); }
-                                                })();
-                                            """.trimIndent()
-                                            runCatching { wv.evaluateJavascript(js, null) }
-                                        }
-                                        runnables += r
-                                        mainHandler.postDelayed(r, delayMs)
-                                    }
-                                }
-                            }
-                            wv.loadUrl(OFFICIAL_WIN_URL)
-                        } catch (t: Throwable) {
-                            SafeProbeIo.warn(TAG, "WebView initialization failed: ${t.message}", t)
-                            finish(null)
-                        }
-                    }
-                }
             }
         }
     }

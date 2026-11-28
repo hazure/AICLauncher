@@ -354,21 +354,10 @@ fun MainScreen(viewModel: MainViewModel) {
     }
 
     if (uiState.downloadPage.pendingCaptureItemId != null) {
-        ShortCodeCaptureDialog(
+        ExternalShortCodeRelayDialog(
             onCaptured = { code, fileName -> viewModel.onShortCodeCaptured(code, fileName) },
             onFallbackManual = { viewModel.onShortCodeCaptureCancelled(openManualDialog = true) },
             onDismiss = { viewModel.onShortCodeCaptureCancelled(openManualDialog = false) }
-        )
-    }
-
-    uiState.downloadPage.pendingWebViewDownload?.let { wvTask ->
-        WebViewDownloadDialog(
-            task = wvTask,
-            onProgress = { dl, total, pct -> viewModel.onWebViewDownloadProgress(wvTask.itemId, dl, total, pct) },
-            onPartFileReady = { part -> viewModel.onWebViewDownloadPartReady(part) },
-            onWebViewUnavailable = { reason -> viewModel.onWebViewDownloadUnavailable(reason) },
-            onFailed = { err -> viewModel.onWebViewDownloadFailed(err) },
-            onCancel = { viewModel.cancelWebViewDownload() }
         )
     }
 }
