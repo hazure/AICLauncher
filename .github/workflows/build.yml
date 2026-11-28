@@ -132,6 +132,7 @@ jobs:
           else
             gh release create "$TAG" "$APK_NAME" \
               --title "$TITLE" \
-              --generate-release-notes \
+              --target "$GITHUB_SHA" \
+              --generate-notes \
               $PRERELEASE_FLAG
           fi
