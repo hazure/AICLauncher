@@ -427,6 +427,26 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
+    fun onDirectDownloadUrlCaptured(url: String, fileName: String) {
+        val pendingItemId = _uiState.value.downloadPage.pendingCaptureItemId
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = null))
+        }
+        if (pendingItemId.isNullOrBlank() || url.isBlank()) return
+        val target = _uiState.value.downloadPage.allItems.find { it.id == pendingItemId }
+        val cleanName = fileName.ifBlank { target?.fileName?.ifBlank { "$pendingItemId.7z" } ?: "$pendingItemId.7z" }
+        val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
+        downloadQueueManager.enqueue(
+            DownloadRequest(
+                itemId = pendingItemId,
+                url = url,
+                destFile = File(downloadDir, cleanName),
+                expectedBytes = target?.sizeBytes ?: 0L,
+                sourceChannel = com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK
+            )
+        )
+    }
+
     fun onShortCodeCaptureCancelled(openManualDialog: Boolean = false) {
         val pendingItemId = _uiState.value.downloadPage.pendingCaptureItemId
         _uiState.update { state ->

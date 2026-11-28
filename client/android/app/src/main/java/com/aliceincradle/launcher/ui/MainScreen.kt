@@ -355,11 +355,24 @@ fun MainScreen(viewModel: MainViewModel) {
     }
 
     if (uiState.downloadPage.pendingCaptureItemId != null) {
-        ExternalShortCodeRelayDialog(
-            onCaptured = { code, fileName -> viewModel.onShortCodeCaptured(code, fileName) },
-            onFallbackManual = { viewModel.onShortCodeCaptureCancelled(openManualDialog = true) },
-            onDismiss = { viewModel.onShortCodeCaptureCancelled(openManualDialog = false) }
-        )
+        var useExternalRelayFallback by remember(uiState.downloadPage.pendingCaptureItemId) {
+            mutableStateOf(false)
+        }
+        if (!useExternalRelayFallback) {
+            GeckoCaptureDialog(
+                onCaptured = { code, fileName -> viewModel.onShortCodeCaptured(code, fileName) },
+                onDirectDownloadUrl = { url, fileName -> viewModel.onDirectDownloadUrlCaptured(url, fileName) },
+                onFallbackExternalRelay = { useExternalRelayFallback = true },
+                onFallbackManual = { viewModel.onShortCodeCaptureCancelled(openManualDialog = true) },
+                onDismiss = { viewModel.onShortCodeCaptureCancelled(openManualDialog = false) }
+            )
+        } else {
+            ExternalShortCodeRelayDialog(
+                onCaptured = { code, fileName -> viewModel.onShortCodeCaptured(code, fileName) },
+                onFallbackManual = { viewModel.onShortCodeCaptureCancelled(openManualDialog = true) },
+                onDismiss = { viewModel.onShortCodeCaptureCancelled(openManualDialog = false) }
+            )
+        }
     }
 }
 
