@@ -12,7 +12,7 @@ android {
         applicationId = "com.aliceincradle.launcher"
         minSdk = 24
         targetSdk = 34
-        versionCode = 42
+        versionCode = 43
         versionName = "0.1.2m"
         ndk {
             abiFilters += listOf("arm64-v8a")
