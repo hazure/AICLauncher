@@ -70,6 +70,7 @@ fun DownloadScreen(
     onRefreshCatalog: () -> Unit,
     onDetailClick: (DownloadCatalogItem) -> Unit,
     onDismissDetail: () -> Unit,
+    onOpenManualShortCode: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -150,6 +151,12 @@ fun DownloadScreen(
                             modifier = Modifier.testTag("download_cien_fallback_button")
                         ) {
                             Text(text = "前往官方 ci-en 发布页")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenManualShortCode,
+                            modifier = Modifier.testTag("download_manual_shortcode_button")
+                        ) {
+                            Text(text = "手动填入短码")
                         }
                     }
                 }

@@ -1,5 +1,8 @@
 package com.aliceincradle.launcher.ui
 
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,6 +39,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -218,9 +222,32 @@ fun SettingsScreen(
     onLogLevelSelect: (String) -> Unit,
     onForceSoftwareRenderingChange: (Boolean) -> Unit,
     onReservedSectionClick: () -> Unit,
+    onOpenManualShortCodeDialog: () -> Unit = {},
+    onManualShortCodeDraftChange: (String) -> Unit = {},
+    onManualFileNameDraftChange: (String) -> Unit = {},
+    onManualVersionDraftChange: (String) -> Unit = {},
+    onConfirmManualShortCode: () -> Unit = {},
+    onDismissManualShortCodeDialog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val appVersionName = remember(context) {
+        try {
+            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            pkgInfo.versionName?.takeIf { it.isNotBlank() } ?: "unknown"
+        } catch (e: Exception) {
+            Log.e("SettingsTab", "Failed to read package versionName", e)
+            "unknown"
+        }
+    }
     val mountDirLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -559,7 +586,7 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = "v${state.versionName}",
+                        text = "v$appVersionName",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -746,13 +773,78 @@ fun SettingsScreen(
             title = { Text(text = "开源协议") },
             text = {
                 Text(
-                    text = "AICL 基于 Jetpack Compose 与 Material 3 构建；" +
-                        "不包含任何受版权保护的游戏本体或官方二进制资产。"
+                    text = "AICL 基于 Jetpack Compose 与 Material 3 构建（MIT License）。" +
+                        "运行时仅从官方源动态获取 Trial 版资源，绝不捆绑或镜像分发游戏本体；" +
+                        "《Alice In Cradle》版权及 License Terms 归 NanameHacha@Cicini 所有。"
                 )
             },
             confirmButton = {
                 TextButton(onClick = onDismissLicensesDialog) {
                     Text(text = "关闭")
+                }
+            }
+        )
+    }
+
+    if (state.isManualShortCodeDialogOpen) {
+        AlertDialog(
+            onDismissRequest = onDismissManualShortCodeDialog,
+            title = { Text(text = "手动填入官方短码") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "用于验证 302 刷签名链路或外部浏览器捕获兜底",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = state.manualShortCodeDraft,
+                        onValueChange = onManualShortCodeDraftChange,
+                        label = { Text("短码 (shortCode)") },
+                        placeholder = { Text("例如：Oz4hM") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_shortcode_input")
+                    )
+                    OutlinedTextField(
+                        value = state.manualFileNameDraft,
+                        onValueChange = onManualFileNameDraftChange,
+                        label = { Text("文件名 (fileName)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_filename_input")
+                    )
+                    OutlinedTextField(
+                        value = state.manualVersionDraft,
+                        onValueChange = onManualVersionDraftChange,
+                        label = { Text("版本 (可选)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_version_input")
+                    )
+                    if (!state.manualShortCodeError.isNullOrBlank()) {
+                        Text(
+                            text = state.manualShortCodeError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = onConfirmManualShortCode,
+                    modifier = Modifier.testTag("settings_shortcode_confirm")
+                ) {
+                    Text(text = "保存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissManualShortCodeDialog) {
+                    Text(text = "取消")
                 }
             }
         )

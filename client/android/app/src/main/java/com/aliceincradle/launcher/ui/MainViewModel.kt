@@ -2,7 +2,16 @@ package com.aliceincradle.launcher.ui
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
+import com.aliceincradle.launcher.bridge.ArchiveExtractor
+import com.aliceincradle.launcher.bridge.DownloadCoordinator
 import com.aliceincradle.launcher.bridge.EnvDetector
+import com.aliceincradle.launcher.bridge.EnvironmentStatus
+import com.aliceincradle.launcher.bridge.GameSourceResolver
+import com.aliceincradle.launcher.bridge.InjectionBridge
+import com.aliceincradle.launcher.bridge.InjectionPhase
+import com.aliceincradle.launcher.bridge.InjectionUiState
+import com.aliceincradle.launcher.bridge.ResolveOutcome
+import com.aliceincradle.launcher.bridge.ShortCodeCacheStore
 import com.aliceincradle.launcher.data.DefaultPathProvider
 import com.aliceincradle.launcher.data.DeviceInfo
 import com.aliceincradle.launcher.data.DeviceInfoProvider
@@ -31,6 +40,13 @@ import com.aliceincradle.launcher.data.SystemTelemetryProvider
 import com.aliceincradle.launcher.data.TelemetryPreviewFactory
 import com.aliceincradle.launcher.data.formatFileSize
 import com.aliceincradle.launcher.data.validateEnvVars
+import com.aliceincradle.launcher.ui.file.ConfigTemplateRegistry
+import com.aliceincradle.launcher.ui.file.FileClickRouter
+import com.aliceincradle.launcher.ui.file.FileOpenAction
+import com.aliceincradle.launcher.ui.file.FileTextCodec
+import com.aliceincradle.launcher.ui.file.NavOutcome
+import com.aliceincradle.launcher.ui.file.PaneNavState
+import com.aliceincradle.launcher.ui.file.PathNavigator
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CoroutineDispatcher
@@ -72,7 +88,8 @@ data class MainUiState(
     val selectedTab: MainTab = MainTab.HOME,
     val downloadPage: DownloadPageState = DownloadPageState(),
     val folderPage: FolderPageState = FolderPageState(),
-    val settingsPage: SettingsPageState = SettingsPageState()
+    val settingsPage: SettingsPageState = SettingsPageState(),
+    val injectionState: InjectionUiState = InjectionUiState()
 )
 
 class MainViewModel @JvmOverloads constructor(
@@ -87,7 +104,12 @@ class MainViewModel @JvmOverloads constructor(
     private val catalogFetcher: RemoteCatalogFetcher = RemoteCatalogFetcher(),
     private val maintenanceManager: MaintenanceManager = MaintenanceManager(),
     downloadQueueManagerOverride: DownloadQueueManager? = null,
-    autoFetchCatalog: Boolean = true
+    autoFetchCatalog: Boolean = true,
+    private val injectionBridge: InjectionBridge = InjectionBridge(),
+    private val gameSourceResolverOverride: GameSourceResolver? = null,
+    private val shortCodeStoreOverride: ShortCodeCacheStore? = null,
+    private val downloadCoordinatorOverride: DownloadCoordinator? = null,
+    private val useWebViewPrimaryOverride: Boolean? = null
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -198,6 +220,7 @@ class MainViewModel @JvmOverloads constructor(
             refreshTelemetryAndEnv(includeEnv = true)
             refreshFilePanesSync()
             refreshCacheSizeSync()
+            refreshInjectionStateSync()
         }
     }
 
@@ -290,15 +313,16 @@ class MainViewModel @JvmOverloads constructor(
                         )
                     )
                 }
-            }.onFailure {
+            }.onFailure { err ->
+                val msg = err.message ?: "索引获取失败，请检查网络或稍后重试"
                 _uiState.update { state ->
                     state.copy(
                         downloadPage = state.downloadPage.copy(
                             allItems = emptyList(),
                             items = emptyList(),
                             isLoadingCatalog = false,
-                            catalogError = "索引获取失败，请检查网络或稍后重试",
-                            statsText = "索引获取失败，请检查网络或稍后重试"
+                            catalogError = msg,
+                            statsText = msg
                         )
                     )
                 }
@@ -334,16 +358,12 @@ class MainViewModel @JvmOverloads constructor(
         val target = _uiState.value.downloadPage.allItems.find { it.id == itemId } ?: return
         if (target.status == DownloadContentStatus.DISABLED ||
             target.status == DownloadContentStatus.QUEUED ||
-            target.status == DownloadContentStatus.DOWNLOADING ||
-            target.downloadUrl.isBlank()
+            target.status == DownloadContentStatus.DOWNLOADING
         ) {
             return
         }
 
         val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
-        val fileName = target.fileName.ifBlank { "${target.id}.zip" }
-        val destFile = File(downloadDir, fileName)
-
         updateCatalogItem(itemId) {
             it.copy(
                 status = DownloadContentStatus.QUEUED,
@@ -352,14 +372,98 @@ class MainViewModel @JvmOverloads constructor(
                 errorMessage = null
             )
         }
+
+        probeScope.launch {
+            val coordinator = getDownloadCoordinator()
+            when (val outcome = coordinator.start()) {
+                is ResolveOutcome.NeedCapture -> {
+                    updateCatalogItem(itemId) {
+                        it.copy(status = DownloadContentStatus.AVAILABLE, errorMessage = null)
+                    }
+                    _uiState.update { state ->
+                        state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = itemId))
+                    }
+                }
+                is ResolveOutcome.Failed -> {
+                    updateCatalogItem(itemId) {
+                        it.copy(
+                            status = DownloadContentStatus.FAILED,
+                            errorMessage = outcome.message
+                        )
+                    }
+                }
+                is ResolveOutcome.Ready -> {
+                    val fileName = outcome.source.fileName.ifBlank {
+                        target.fileName.ifBlank { "${target.id}.7z" }
+                    }
+                    val destFile = File(downloadDir, fileName)
+                    downloadQueueManager.enqueue(
+                        DownloadRequest(
+                            itemId = itemId,
+                            url = outcome.source.url,
+                            destFile = destFile,
+                            expectedBytes = outcome.source.sizeBytes ?: target.sizeBytes,
+                            expectedSha256 = outcome.source.sha256,
+                            sourceChannel = com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK,
+                            reResolveUrl = {
+                                (coordinator.start(oldFp = outcome.fp) as? ResolveOutcome.Ready)?.source?.url
+                            }
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun onShortCodeCaptured(shortCode: String, fileName: String) {
+        val pendingItemId = _uiState.value.downloadPage.pendingCaptureItemId
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = null))
+        }
+        getDownloadCoordinator().saveShortCode(shortCode, fileName, version = null, isManual = false)
+        refreshCachedShortCodeSummary()
+        if (!pendingItemId.isNullOrBlank()) {
+            triggerCatalogDownload(pendingItemId)
+        }
+    }
+
+    fun onDirectDownloadUrlCaptured(url: String, fileName: String) {
+        val pendingItemId = _uiState.value.downloadPage.pendingCaptureItemId
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = null))
+        }
+        if (pendingItemId.isNullOrBlank() || url.isBlank()) return
+        val target = _uiState.value.downloadPage.allItems.find { it.id == pendingItemId }
+        val cleanName = fileName.ifBlank { target?.fileName?.ifBlank { "$pendingItemId.7z" } ?: "$pendingItemId.7z" }
+        val downloadDir = DownloadQueueManager.resolveDownloadDirectory(appContext)
         downloadQueueManager.enqueue(
             DownloadRequest(
-                itemId = itemId,
-                url = target.downloadUrl,
-                destFile = destFile,
-                expectedBytes = target.sizeBytes
+                itemId = pendingItemId,
+                url = url,
+                destFile = File(downloadDir, cleanName),
+                expectedBytes = target?.sizeBytes ?: 0L,
+                sourceChannel = com.aliceincradle.launcher.data.DownloadSourceChannel.HTTP_FALLBACK
             )
         )
+    }
+
+    fun onShortCodeCaptureCancelled(openManualDialog: Boolean = false) {
+        val pendingItemId = _uiState.value.downloadPage.pendingCaptureItemId
+        _uiState.update { state ->
+            state.copy(downloadPage = state.downloadPage.copy(pendingCaptureItemId = null))
+        }
+        if (!pendingItemId.isNullOrBlank()) {
+            updateCatalogItem(pendingItemId) {
+                it.copy(
+                    status = DownloadContentStatus.FAILED,
+                    errorMessage = "SHORTCODE_MISSING: 未捕获到短码"
+                )
+            }
+        }
+        if (openManualDialog) {
+            selectTab(MainTab.SETTINGS)
+            openManualShortCodeDialog()
+        }
     }
 
     fun cancelCatalogDownload(itemId: String) {
@@ -1414,8 +1518,7 @@ class MainViewModel @JvmOverloads constructor(
                     pythonDirOptions = nextDirOptions,
                     logLevel = data.logLevel,
                     isDevModeUnlocked = data.isDevModeUnlocked,
-                    forceSoftwareRendering = data.forceSoftwareRendering,
-                    versionName = data.versionName
+                    forceSoftwareRendering = data.forceSoftwareRendering
                 )
             )
         }
@@ -1442,8 +1545,7 @@ class MainViewModel @JvmOverloads constructor(
                     selectedPythonDir = nextPage.selectedPythonDir,
                     logLevel = nextPage.logLevel,
                     isDevModeUnlocked = nextPage.isDevModeUnlocked,
-                    forceSoftwareRendering = nextPage.forceSoftwareRendering,
-                    versionName = nextPage.versionName
+                    forceSoftwareRendering = nextPage.forceSoftwareRendering
                 )
             }
             state.copy(settingsPage = nextPage)
@@ -1461,5 +1563,782 @@ class MainViewModel @JvmOverloads constructor(
                 )
             )
         }
+    }
+
+    // ==================== BepInEx Injection State Machine ====================
+
+    @Volatile
+    private var selectedInjectionGameDir: File? = null
+
+    fun refreshInjectionState() {
+        probeScope.launch {
+            refreshInjectionStateSync()
+        }
+    }
+
+    private fun refreshInjectionStateSync() {
+        val ctx = appContext ?: return
+        val checkpoint = injectionBridge.detectPendingCheckpoint(ctx.cacheDir)
+        val (status, gameRoot, framework) = injectionBridge.evaluateEnvironment(
+            context = ctx,
+            filesDir = ctx.filesDir,
+            userGameDir = selectedInjectionGameDir
+        )
+        val phase = when (status) {
+            EnvironmentStatus.ALREADY_INJECTED -> InjectionPhase.READY
+            EnvironmentStatus.READY -> InjectionPhase.FRAMEWORK_READY
+            else -> InjectionPhase.IDLE
+        }
+        _uiState.update { state ->
+            state.copy(
+                injectionState = state.injectionState.copy(
+                    envStatus = status,
+                    phase = phase,
+                    gameRoot = gameRoot,
+                    frameworkSource = framework,
+                    pendingCheckpoint = checkpoint
+                )
+            )
+        }
+    }
+
+    fun setInjectionGameDirFromSaf(treeUriString: String) {
+        val resolved = fileRepository.resolveSafTreeToDirectory(treeUriString)
+        if (resolved == null) {
+            _uiState.update { state ->
+                state.copy(
+                    injectionState = state.injectionState.copy(
+                        statusMessage = "所选 SAF 目录暂不支持直接访问，请授予全部文件访问权限或选择内部存储目录"
+                    )
+                )
+            }
+            return
+        }
+        selectedInjectionGameDir = resolved
+        refreshInjectionState()
+    }
+
+    fun requestInjection() {
+        val ctx = appContext ?: return
+        val current = _uiState.value.injectionState
+        when (current.envStatus) {
+            EnvironmentStatus.GAME_NOT_FOUND -> {
+                _uiState.update {
+                    it.copy(injectionState = current.copy(statusMessage = "未检测到 Unity 游戏本体（.exe 与同名 _Data/），请先选择游戏根目录"))
+                }
+                return
+            }
+            EnvironmentStatus.FRAMEWORK_MISSING -> {
+                _uiState.update {
+                    it.copy(injectionState = current.copy(statusMessage = "未检测到本地 BepInEx 框架包，请将 BepInEx*.zip 放置于 Downloads 或 frameworks 目录"))
+                }
+                return
+            }
+            EnvironmentStatus.PERMISSION_DENIED -> {
+                _uiState.update {
+                    it.copy(injectionState = current.copy(statusMessage = "目标游戏目录无写入权限，请检查存储权限"))
+                }
+                return
+            }
+            EnvironmentStatus.ALREADY_INJECTED -> {
+                _uiState.update {
+                    it.copy(injectionState = current.copy(statusMessage = "当前游戏目录已完成 BepInEx 注入，无需重复操作"))
+                }
+                return
+            }
+            EnvironmentStatus.READY -> Unit
+        }
+
+        val gameRoot = current.gameRoot ?: return
+        val framework = current.frameworkSource ?: return
+        probeScope.launch {
+            val plugins = injectionBridge.resolvePlugins(ctx)
+            val planResult = injectionBridge.prepareInjectionPlan(gameRoot, framework, plugins)
+            planResult.onSuccess { plan ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            phase = InjectionPhase.AWAITING_CONFIRMATION,
+                            pendingPlan = plan
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            phase = InjectionPhase.FAILED,
+                            statusMessage = err.message ?: "生成注入清单失败"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelInjectionPlan() {
+        _uiState.update { state ->
+            state.copy(
+                injectionState = state.injectionState.copy(
+                    phase = InjectionPhase.CANCELLED,
+                    pendingPlan = null,
+                    statusMessage = "已取消注入，未写入任何文件"
+                )
+            )
+        }
+    }
+
+    fun confirmInjection() {
+        val ctx = appContext ?: return
+        val plan = _uiState.value.injectionState.pendingPlan ?: return
+        _uiState.update { state ->
+            state.copy(
+                injectionState = state.injectionState.copy(
+                    phase = InjectionPhase.INJECTING,
+                    pendingPlan = null,
+                    isBusy = true
+                )
+            )
+        }
+        probeScope.launch {
+            val res = injectionBridge.executeInjection(plan, ctx.filesDir, ctx.cacheDir)
+            res.onSuccess { report ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            envStatus = EnvironmentStatus.ALREADY_INJECTED,
+                            phase = InjectionPhase.READY,
+                            lastReport = report,
+                            isBusy = false,
+                            statusMessage = "BepInEx 注入并校验成功（耗时 ${report.durationMs}ms）"
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            phase = InjectionPhase.FAILED,
+                            isBusy = false,
+                            statusMessage = err.message ?: "注入失败，已回滚"
+                        )
+                    )
+                }
+                refreshInjectionStateSync()
+            }
+        }
+    }
+
+    fun recoverInjectionCheckpoint() {
+        val ctx = appContext ?: return
+        probeScope.launch {
+            val res = injectionBridge.recoverCheckpoint(ctx.cacheDir)
+            res.onSuccess { removed ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            pendingCheckpoint = null,
+                            statusMessage = "已清理 $removed 个半成品文件，可重新执行注入"
+                        )
+                    )
+                }
+                refreshInjectionStateSync()
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        injectionState = state.injectionState.copy(
+                            statusMessage = "恢复清理失败：${err.message}"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissInjectionSnackbar() {
+        _uiState.update { state ->
+            state.copy(injectionState = state.injectionState.copy(statusMessage = null))
+        }
+    }
+
+    // ==================== T34 Click-to-Open, Navigation & Editors ====================
+
+    private var leftNavState: PaneNavState? = null
+    private var rightNavState: PaneNavState? = null
+
+    fun setInjectionGameDir(dir: File) {
+        selectedInjectionGameDir = dir
+        refreshInjectionState()
+    }
+
+    fun getInitialPickerDir(): File {
+        return fileRepository.resolveInitialLeftDir(appContext)
+    }
+
+    fun onPaneFileClicked(side: FilePaneSide, item: FileItem, onExternalOpen: (FileItem) -> Unit = {}) {
+        val currentActive = _uiState.value.folderPage.activePane
+        if (currentActive != side) {
+            selectFilePane(side)
+            return
+        }
+
+        val currentPath = if (side == FilePaneSide.LEFT) {
+            _uiState.value.folderPage.currentPath
+        } else {
+            _uiState.value.folderPage.targetPath
+        }
+        val rootBoundary = fileRepository.resolveInitialLeftDir(appContext)
+        val nav = getOrInitNavState(side, rootBoundary, currentPath)
+        val targetFile = item.path.takeIf { it.isNotBlank() }?.let(::File)
+
+        when (val action = FileClickRouter.open(item, targetFile)) {
+            is FileOpenAction.NavigateParent -> {
+                when (val res = PathNavigator.navigateParent(nav)) {
+                    is NavOutcome.Navigated -> applyNavState(side, res.state)
+                    is NavOutcome.AtRoot -> _uiState.update {
+                        it.copy(folderPage = it.folderPage.copy(actionNotice = res.message))
+                    }
+                    is NavOutcome.OutOfBounds -> _uiState.update {
+                        it.copy(folderPage = it.folderPage.copy(actionNotice = res.message))
+                    }
+                }
+            }
+            is FileOpenAction.EnterDirectory -> {
+                if (targetFile != null) {
+                    when (val res = PathNavigator.navigateInto(nav, targetFile)) {
+                        is NavOutcome.Navigated -> applyNavState(side, res.state)
+                        is NavOutcome.AtRoot -> _uiState.update {
+                            it.copy(folderPage = it.folderPage.copy(actionNotice = res.message))
+                        }
+                        is NavOutcome.OutOfBounds -> _uiState.update {
+                            it.copy(folderPage = it.folderPage.copy(actionNotice = res.message))
+                        }
+                    }
+                }
+            }
+            is FileOpenAction.BlockedBinaryOrOversized -> {
+                _uiState.update {
+                    it.copy(folderPage = it.folderPage.copy(actionNotice = action.reason))
+                }
+            }
+            is FileOpenAction.OpenReadOnlyViewer -> openReadOnlyViewer(item, targetFile, action.isMarkdown)
+            is FileOpenAction.OpenCodeEditor -> openCodeEditor(item, targetFile)
+            is FileOpenAction.OpenConfigTemplate -> openConfigTemplate(item, targetFile, action.template)
+            is FileOpenAction.OpenConfigUnmatched -> {
+                _uiState.update {
+                    it.copy(
+                        folderPage = it.folderPage.copy(
+                            activeDialog = FileManagerDialog.ConfigUnmatchedPrompt(
+                                item = item,
+                                fallbackToReadOnly = action.fallbackToReadOnly
+                            )
+                        )
+                    )
+                }
+            }
+            is FileOpenAction.OpenUnknownExternal -> onExternalOpen(item)
+        }
+    }
+
+    fun onFolderBackPressed(): Boolean {
+        val side = _uiState.value.folderPage.activePane
+        val currentPath = if (side == FilePaneSide.LEFT) {
+            _uiState.value.folderPage.currentPath
+        } else {
+            _uiState.value.folderPage.targetPath
+        }
+        val nav = getOrInitNavState(side, fileRepository.resolveInitialLeftDir(appContext), currentPath)
+        return when (val res = PathNavigator.navigateBack(nav)) {
+            is NavOutcome.Navigated -> {
+                applyNavState(side, res.state)
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun getOrInitNavState(side: FilePaneSide, rootBoundary: File, currentPath: String): PaneNavState {
+        val existing = if (side == FilePaneSide.LEFT) leftNavState else rightNavState
+        if (existing != null && existing.currentDir.absolutePath == currentPath) {
+            return existing
+        }
+        val created = PaneNavState(
+            rootBoundary = rootBoundary,
+            currentDir = if (currentPath.isNotBlank()) File(currentPath) else rootBoundary
+        )
+        if (side == FilePaneSide.LEFT) leftNavState = created else rightNavState = created
+        return created
+    }
+
+    private fun applyNavState(side: FilePaneSide, next: PaneNavState) {
+        if (side == FilePaneSide.LEFT) leftNavState = next else rightNavState = next
+        switchPaneDirectory(side, next.currentDir)
+    }
+
+    private fun openReadOnlyViewer(item: FileItem, file: File?, isMarkdown: Boolean) {
+        if (file == null) return
+        probeScope.launch {
+            FileTextCodec.readForViewer(file).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        folderPage = it.folderPage.copy(
+                            activeDialog = FileManagerDialog.ReadOnlyViewer(
+                                item = item,
+                                content = res.content,
+                                isMarkdown = isMarkdown,
+                                isTruncated = res.isTruncated
+                            )
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "无法预览文件"))
+                }
+            }
+        }
+    }
+
+    private fun openCodeEditor(item: FileItem, file: File?) {
+        if (file == null) return
+        probeScope.launch {
+            FileTextCodec.readForEditor(file).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        folderPage = it.folderPage.copy(
+                            activeDialog = FileManagerDialog.CodeEditor(
+                                item = item,
+                                initialContent = res.content,
+                                content = res.content,
+                                hasBom = res.hasBom,
+                                lineEnding = res.lineEnding
+                            )
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "无法打开编辑器"))
+                }
+            }
+        }
+    }
+
+    private fun openConfigTemplate(
+        item: FileItem,
+        file: File?,
+        template: com.aliceincradle.launcher.ui.file.ConfigTemplate
+    ) {
+        if (file == null) return
+        probeScope.launch {
+            FileTextCodec.readForEditor(file).onSuccess { res ->
+                val parsed = ConfigTemplateRegistry.parseIniConfig(res.content, template)
+                _uiState.update {
+                    it.copy(
+                        folderPage = it.folderPage.copy(
+                            activeDialog = FileManagerDialog.ConfigTemplateForm(
+                                item = item,
+                                templateName = template.displayName,
+                                fields = parsed.fields,
+                                hasBom = res.hasBom,
+                                lineEnding = res.lineEnding
+                            )
+                        )
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "无法读取配置"))
+                }
+            }
+        }
+    }
+
+    fun updateCodeEditorContent(nextContent: String) {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            if (nextContent == editor.content) return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = editor.copy(
+                        content = nextContent,
+                        undoStack = (editor.undoStack + editor.content).takeLast(30),
+                        redoStack = emptyList()
+                    )
+                )
+            )
+        }
+    }
+
+    fun undoCodeEditor() {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            val prev = editor.undoStack.lastOrNull() ?: return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = editor.copy(
+                        content = prev,
+                        undoStack = editor.undoStack.dropLast(1),
+                        redoStack = editor.redoStack + editor.content
+                    )
+                )
+            )
+        }
+    }
+
+    fun redoCodeEditor() {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            val next = editor.redoStack.lastOrNull() ?: return@update state
+            state.copy(
+                folderPage = state.folderPage.copy(
+                    activeDialog = editor.copy(
+                        content = next,
+                        undoStack = editor.undoStack + editor.content,
+                        redoStack = editor.redoStack.dropLast(1)
+                    )
+                )
+            )
+        }
+    }
+
+    fun insertTabInCodeEditor() {
+        val editor = _uiState.value.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return
+        updateCodeEditorContent(editor.content + "    ")
+    }
+
+    fun saveCodeEditor() {
+        val editor = _uiState.value.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return
+        val file = editor.item.path.takeIf { it.isNotBlank() }?.let(::File) ?: return
+        probeScope.launch {
+            FileTextCodec.saveAtomically(file, editor.content, editor.hasBom, editor.lineEnding)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            folderPage = it.folderPage.copy(
+                                activeDialog = null,
+                                actionNotice = "已原子保存 ${editor.item.name}（已生成 .bak 备份）"
+                            )
+                        )
+                    }
+                    refreshFilePanesSync()
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "保存失败"))
+                    }
+                }
+        }
+    }
+
+    fun requestCloseCodeEditor() {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            if (editor.isDirty) {
+                state.copy(
+                    folderPage = state.folderPage.copy(activeDialog = editor.copy(showDiscardConfirm = true))
+                )
+            } else {
+                state.copy(folderPage = state.folderPage.copy(activeDialog = null))
+            }
+        }
+    }
+
+    fun dismissCodeEditorDiscardConfirm() {
+        _uiState.update { state ->
+            val editor = state.folderPage.activeDialog as? FileManagerDialog.CodeEditor ?: return@update state
+            state.copy(folderPage = state.folderPage.copy(activeDialog = editor.copy(showDiscardConfirm = false)))
+        }
+    }
+
+    fun updateConfigTemplateField(index: Int, value: String) {
+        _uiState.update { state ->
+            val form = state.folderPage.activeDialog as? FileManagerDialog.ConfigTemplateForm ?: return@update state
+            val updated = form.fields.mapIndexed { idx, f -> if (idx == index) f.copy(value = value) else f }
+            state.copy(folderPage = state.folderPage.copy(activeDialog = form.copy(fields = updated)))
+        }
+    }
+
+    fun saveConfigTemplateForm() {
+        val form = _uiState.value.folderPage.activeDialog as? FileManagerDialog.ConfigTemplateForm ?: return
+        val file = form.item.path.takeIf { it.isNotBlank() }?.let(::File) ?: return
+        val serialized = ConfigTemplateRegistry.serializeIniConfig(
+            com.aliceincradle.launcher.ui.file.ParsedConfig(form.fields, form.lineEnding)
+        )
+        probeScope.launch {
+            FileTextCodec.saveAtomically(file, serialized, form.hasBom, form.lineEnding)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            folderPage = it.folderPage.copy(
+                                activeDialog = null,
+                                actionNotice = "已保存配置 ${form.item.name}"
+                            )
+                        )
+                    }
+                    refreshFilePanesSync()
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(folderPage = it.folderPage.copy(actionNotice = err.message ?: "保存配置失败"))
+                    }
+                }
+        }
+    }
+
+    fun openUnmatchedConfigDirectly() {
+        val prompt = _uiState.value.folderPage.activeDialog as? FileManagerDialog.ConfigUnmatchedPrompt ?: return
+        val file = prompt.item.path.takeIf { it.isNotBlank() }?.let(::File)
+        if (prompt.fallbackToReadOnly) {
+            openReadOnlyViewer(prompt.item, file, isMarkdown = false)
+        } else {
+            openCodeEditor(prompt.item, file)
+        }
+    }
+
+    // ==================== T35 Official Trial Acquisition & Handoff ====================
+
+    enum class AcquisitionPhase {
+        IDLE,
+        CAPTURING_SHORTCODE,
+        RESOLVING_SOURCE,
+        DOWNLOADING,
+        VERIFYING_MAGIC,
+        EXTRACTING,
+        READY,
+        SHORTCODE_MISSING,
+        SOURCE_UNAVAILABLE,
+        LINK_UNRESOLVABLE,
+        LINK_EXPIRED,
+        CF_CHALLENGE_HTML,
+        NOT_ARCHIVE,
+        DOWNLOAD_FAILED,
+        CHECKSUM_MISMATCH,
+        EXTRACTOR_MISSING,
+        EXTRACT_FAILED,
+        GAME_NOT_FOUND
+    }
+
+    data class AcquisitionUiState(
+        val phase: AcquisitionPhase = AcquisitionPhase.IDLE,
+        val progressPercent: Int = 0,
+        val statusMessage: String? = null,
+        val resolvedGameDir: File? = null
+    )
+
+    private val _acquisitionState = MutableStateFlow(AcquisitionUiState())
+    val acquisitionState: StateFlow<AcquisitionUiState> = _acquisitionState.asStateFlow()
+
+    private val gameSourceResolver: GameSourceResolver = gameSourceResolverOverride ?: GameSourceResolver()
+    private val archiveExtractor = ArchiveExtractor()
+
+    private fun getShortCodeStore(): ShortCodeCacheStore {
+        if (shortCodeStoreOverride != null) return shortCodeStoreOverride
+        val baseDir = appContext?.filesDir ?: File("downloads")
+        return ShortCodeCacheStore(File(baseDir, "aicl_shortlink_cache.properties"))
+    }
+
+    internal fun getDownloadCoordinator(): DownloadCoordinator {
+        return downloadCoordinatorOverride ?: DownloadCoordinator(
+            resolver = gameSourceResolver,
+            shortCodeStore = getShortCodeStore()
+        )
+    }
+
+    fun refreshCachedShortCodeSummary() {
+        val cached = getDownloadCoordinator().loadCachedShortCode()
+        val summary = if (cached == null) {
+            "未配置短码"
+        } else {
+            val mode = if (cached.isManual) "手动" else "捕获"
+            "$mode: ${cached.shortCode}"
+        }
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(cachedShortCodeSummary = summary))
+        }
+    }
+
+    fun openManualShortCodeDialog() {
+        val cached = getDownloadCoordinator().loadCachedShortCode()
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    isManualShortCodeDialogOpen = true,
+                    manualShortCodeDraft = cached?.shortCode ?: state.settingsPage.manualShortCodeDraft,
+                    manualFileNameDraft = cached?.fileName ?: state.settingsPage.manualFileNameDraft,
+                    manualVersionDraft = cached?.version ?: state.settingsPage.manualVersionDraft,
+                    manualShortCodeError = null
+                )
+            )
+        }
+    }
+
+    fun updateManualShortCodeDraft(shortCode: String) {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(manualShortCodeDraft = shortCode, manualShortCodeError = null))
+        }
+    }
+
+    fun updateManualFileNameDraft(fileName: String) {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(manualFileNameDraft = fileName, manualShortCodeError = null))
+        }
+    }
+
+    fun updateManualVersionDraft(version: String) {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(manualVersionDraft = version))
+        }
+    }
+
+    fun confirmManualShortCode() {
+        val settings = _uiState.value.settingsPage
+        val code = settings.manualShortCodeDraft.trim()
+        val name = settings.manualFileNameDraft.trim()
+        if (code.isEmpty() || name.isEmpty()) {
+            _uiState.update { state ->
+                state.copy(settingsPage = state.settingsPage.copy(manualShortCodeError = "短码与文件名不能为空"))
+            }
+            return
+        }
+        saveManualShortCode(code, name, settings.manualVersionDraft.trim().takeIf { it.isNotEmpty() })
+        _uiState.update { state ->
+            state.copy(
+                settingsPage = state.settingsPage.copy(
+                    isManualShortCodeDialogOpen = false,
+                    manualShortCodeError = null,
+                    statusNotice = "已保存手动短码：$code"
+                )
+            )
+        }
+    }
+
+    fun dismissManualShortCodeDialog() {
+        _uiState.update { state ->
+            state.copy(settingsPage = state.settingsPage.copy(isManualShortCodeDialogOpen = false, manualShortCodeError = null))
+        }
+    }
+
+    fun saveManualShortCode(shortCode: String, fileName: String, version: String? = null) {
+        val code = shortCode.trim()
+        val name = fileName.trim()
+        if (code.isEmpty() || name.isEmpty()) return
+        getDownloadCoordinator().saveShortCode(
+            shortCode = code,
+            fileName = name,
+            version = version,
+            isManual = true
+        )
+        refreshCachedShortCodeSummary()
+    }
+
+    fun startOfficialTrialAcquisition() {
+        val ctx = appContext ?: return
+        val store = com.aliceincradle.launcher.bridge.ShortCodeCacheStore(File(ctx.filesDir, "aicl_shortlink_cache.properties"))
+        _acquisitionState.value = AcquisitionUiState(
+            phase = AcquisitionPhase.RESOLVING_SOURCE,
+            statusMessage = "正在通过短链刷新最新签名直链..."
+        )
+        probeScope.launch {
+            val cached = store.load()
+            val source = if (cached != null) {
+                gameSourceResolver.resolveFromShortCode(
+                    shortCode = cached.shortCode,
+                    fileName = cached.fileName,
+                    version = cached.version,
+                    sourceKind = com.aliceincradle.launcher.bridge.SourceKind.SHORTCODE_REFRESH
+                ).getOrNull()
+            } else {
+                _acquisitionState.value = AcquisitionUiState(
+                    phase = AcquisitionPhase.CAPTURING_SHORTCODE,
+                    statusMessage = "未缓存短码，正在通过官方页捕获..."
+                )
+                gameSourceResolver.resolveLatestWinTrial(ctx)
+            }
+            if (source == null) {
+                _acquisitionState.value = AcquisitionUiState(
+                    phase = if (cached == null) AcquisitionPhase.SHORTCODE_MISSING else AcquisitionPhase.LINK_UNRESOLVABLE,
+                    statusMessage = if (cached == null) {
+                        "未捕获到短码，请在设置中手动填入短码"
+                    } else {
+                        "取链未能刷新，可能短码失效或网络受限"
+                    }
+                )
+                return@launch
+            }
+            val downloadDir = DownloadQueueManager.resolveDownloadDirectory(ctx)
+            val destFile = File(downloadDir, source.fileName)
+            val extractTarget = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "AliceInCradle_Trial")
+            val fp = GameSourceResolver.urlFingerprint(source.url)
+
+            _acquisitionState.value = AcquisitionUiState(
+                phase = AcquisitionPhase.DOWNLOADING,
+                progressPercent = 0,
+                statusMessage = "正在下载官方 Trial 包..."
+            )
+
+            downloadQueueManager.enqueue(
+                DownloadRequest(
+                    itemId = "__official_trial__",
+                    url = source.url,
+                    destFile = destFile,
+                    expectedBytes = source.sizeBytes ?: 0L,
+                    expectedSha256 = source.sha256,
+                    reResolveUrl = { gameSourceResolver.resolveLatestWinTrial(ctx)?.url }
+                )
+            )
+
+            // Wait for download completion or failure via polling file/state
+            // Actual extraction is triggered when destFile is ready
+            if (destFile.isFile && destFile.length() > 0L) {
+                _acquisitionState.value = AcquisitionUiState(
+                    phase = AcquisitionPhase.EXTRACTING,
+                    progressPercent = 100,
+                    statusMessage = "正在解压本体包..."
+                )
+                val extractRes = archiveExtractor.extractAtomically(
+                    archiveFile = destFile,
+                    targetDir = extractTarget,
+                    cacheDir = ctx.cacheDir,
+                    filesDir = ctx.filesDir,
+                    urlFingerprint = fp
+                )
+                extractRes.onSuccess { outDir ->
+                    val probeRes = com.aliceincradle.launcher.bridge.EnvironmentProbe().resolveGameRoot(ctx, outDir)
+                    when (probeRes) {
+                        is com.aliceincradle.launcher.bridge.GameProbeOutcome.Found -> {
+                            _acquisitionState.value = AcquisitionUiState(
+                                phase = AcquisitionPhase.READY,
+                                progressPercent = 100,
+                                statusMessage = "本体已就绪，可进入 T33 注入",
+                                resolvedGameDir = probeRes.root.rootDir
+                            )
+                        }
+                        else -> {
+                            _acquisitionState.value = AcquisitionUiState(
+                                phase = AcquisitionPhase.GAME_NOT_FOUND,
+                                statusMessage = "解压完成但未识别到 Unity 本体，请手动指定目录"
+                            )
+                        }
+                    }
+                }.onFailure { err ->
+                    val phase = if (err is com.aliceincradle.launcher.bridge.ExtractorMissingException) {
+                        AcquisitionPhase.EXTRACTOR_MISSING
+                    } else {
+                        AcquisitionPhase.EXTRACT_FAILED
+                    }
+                    _acquisitionState.value = AcquisitionUiState(
+                        phase = phase,
+                        statusMessage = err.message ?: "解压失败"
+                    )
+                }
+            }
+        }
+    }
+
+    fun handoffAcquiredGameToInjection() {
+        val dir = _acquisitionState.value.resolvedGameDir ?: return
+        setInjectionGameDir(dir)
+        selectTab(MainTab.HOME)
     }
 }

@@ -23,6 +23,7 @@ data class DownloadCatalogItem(
     val isFeatured: Boolean = false,
     val author: String = "官方",
     val description: String = "",
+    @Deprecated("Legacy metadata only; removed from download path per T36_hotfix H4")
     val downloadUrl: String = "",
     val fileName: String = "",
     val sizeBytes: Long = 0L,
@@ -53,7 +54,8 @@ data class DownloadPageState(
     val items: List<DownloadCatalogItem> = emptyList(),
     val selectedDetailItem: DownloadCatalogItem? = null,
     val isLoadingCatalog: Boolean = false,
-    val catalogError: String? = null
+    val catalogError: String? = null,
+    val pendingCaptureItemId: String? = null
 ) {
     val activeDownloadCount: Int
         get() = allItems.count {

@@ -146,6 +146,39 @@ sealed class FileManagerDialog {
         val isFolder: Boolean = false,
         val draftName: String = ""
     ) : FileManagerDialog()
+
+    data class ReadOnlyViewer(
+        val item: FileItem,
+        val content: String,
+        val isMarkdown: Boolean,
+        val isTruncated: Boolean
+    ) : FileManagerDialog()
+
+    data class CodeEditor(
+        val item: FileItem,
+        val initialContent: String,
+        val content: String,
+        val hasBom: Boolean,
+        val lineEnding: String,
+        val undoStack: List<String> = emptyList(),
+        val redoStack: List<String> = emptyList(),
+        val showDiscardConfirm: Boolean = false
+    ) : FileManagerDialog() {
+        val isDirty: Boolean get() = content != initialContent
+    }
+
+    data class ConfigTemplateForm(
+        val item: FileItem,
+        val templateName: String,
+        val fields: List<com.aliceincradle.launcher.ui.file.ConfigField>,
+        val hasBom: Boolean,
+        val lineEnding: String
+    ) : FileManagerDialog()
+
+    data class ConfigUnmatchedPrompt(
+        val item: FileItem,
+        val fallbackToReadOnly: Boolean
+    ) : FileManagerDialog()
 }
 
 enum class FilePaneSide {
@@ -226,7 +259,6 @@ data class SettingsPageState(
     val logLevelOptions: List<String> = listOf("VERBOSE", "DEBUG", "INFO", "WARN", "ERROR"),
     val isDevModeUnlocked: Boolean = false,
     val forceSoftwareRendering: Boolean = false,
-    val versionName: String = "0.1.0a",
     val versionTapCount: Int = 0,
     val selectedPythonVersion: String = "Python 3.10",
     val pythonVersionOptions: List<String> = listOf("Python 3.10", "Python 3.11", "Python 3.12"),
@@ -240,7 +272,13 @@ data class SettingsPageState(
     val reservedButtonLabel: String = "Python 设置",
     val reservedHintText: String = "此处不再多举例！",
     val cacheSizeText: String = "计算中...",
-    val statusNotice: String? = null
+    val statusNotice: String? = null,
+    val cachedShortCodeSummary: String = "未配置短码",
+    val isManualShortCodeDialogOpen: Boolean = false,
+    val manualShortCodeDraft: String = "",
+    val manualFileNameDraft: String = "AliceInCradle Win ver030i.7z",
+    val manualVersionDraft: String = "0.30i",
+    val manualShortCodeError: String? = null
 )
 
 fun formatFileSize(bytes: Long): String {

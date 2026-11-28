@@ -90,12 +90,29 @@ class MainViewModelTest {
                 listener.onCompleted(req.itemId, req.destFile)
             }
         )
+        val shortCodeFile = tempFolder.newFile("aicl_shortlink_cache.properties")
+        val shortCodeStore = com.aliceincradle.launcher.bridge.ShortCodeCacheStore(shortCodeFile).apply {
+            save(
+                com.aliceincradle.launcher.bridge.CachedShortCode(
+                    shortCode = "Oz4hM",
+                    fileName = "aic.zip",
+                    version = null,
+                    isManual = false
+                )
+            )
+        }
+        val resolver = com.aliceincradle.launcher.bridge.GameSourceResolver(
+            shortLinkRedirectFetcher = { Result.success("https://dl.aliceincradle.dev/vanilla/aic.zip?x-oss-signature=sig1") }
+        )
         val vm = MainViewModel(
             ioDispatcher = Dispatchers.Unconfined,
             autoStartPolling = false,
             catalogFetcher = fetcher,
             downloadQueueManagerOverride = queue,
-            autoFetchCatalog = true
+            autoFetchCatalog = true,
+            gameSourceResolverOverride = resolver,
+            shortCodeStoreOverride = shortCodeStore,
+            useWebViewPrimaryOverride = false
         )
 
         val initialPage = vm.uiState.value.downloadPage
@@ -136,8 +153,8 @@ class MainViewModelTest {
         val initial = vm.uiState.value.folderPage
         assertEquals(leftDir.absolutePath, initial.currentPath)
         assertEquals(rightDir.absolutePath, initial.targetPath)
-        assertEquals(1, initial.items.size)
-        assertEquals("AliceInCradle.exe", initial.items.first().name)
+        assertEquals("..", initial.items.first().name)
+        assertTrue(initial.items.any { it.name == "AliceInCradle.exe" })
 
         // Create new file
         vm.openCreateEntryDialog(isFolder = false)

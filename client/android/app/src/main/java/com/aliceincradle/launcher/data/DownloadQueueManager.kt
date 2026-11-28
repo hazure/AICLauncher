@@ -2,12 +2,19 @@ package com.aliceincradle.launcher.data
 
 import android.content.Context
 import android.os.Environment
+import android.util.Log
+import com.aliceincradle.launcher.bridge.ArchiveContainer
+import com.aliceincradle.launcher.bridge.ArchiveExtractor
+import com.aliceincradle.launcher.bridge.GameSourceResolver
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
+import java.security.MessageDigest
+import kotlinx.coroutines.delay
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
@@ -59,23 +66,61 @@ class DefaultCatalogHttpClient : CatalogHttpClient {
  * Never falls back to hardcoded mock items on network failure.
  */
 open class RemoteCatalogFetcher(
-    private val httpClient: CatalogHttpClient = DefaultCatalogHttpClient()
+    private val httpClient: CatalogHttpClient = DefaultCatalogHttpClient(),
+    private val cacheFileProvider: () -> File? = { null }
 ) {
     open fun fetchCatalog(downloadDir: File?): Result<List<DownloadCatalogItem>> {
-        return runCatching {
-            val rawJson = httpClient.fetchText(RAW_CATALOG_URL)
-            val items = parseCatalogJson(rawJson, downloadDir)
-            if (items.isEmpty()) {
-                throw IOException("索引获取失败，请检查网络或稍后重试")
+        var lastError: Throwable? = null
+        val effectiveCacheFile = runCatching { cacheFileProvider() }.getOrNull()
+        for (url in CATALOG_CANDIDATE_URLS) {
+            try {
+                val rawJson = httpClient.fetchText(url)
+                val items = parseCatalogJson(rawJson, downloadDir)
+                if (items.isNotEmpty()) {
+                    persistCatalogCache(rawJson, effectiveCacheFile)
+                    return Result.success(items)
+                }
+            } catch (t: Throwable) {
+                lastError = t
+                SafeProbeIo.warn(TAG, "Remote catalog fetch failed for $url: ${t.message}", t)
             }
-            items
-        }.recoverCatching { err ->
-            SafeProbeIo.warn(TAG, "Remote catalog fetch failed: ${err.message}", err)
-            throw IOException("索引获取失败，请检查网络或稍后重试", err)
+        }
+
+        if (effectiveCacheFile != null && effectiveCacheFile.isFile && effectiveCacheFile.length() > 0L) {
+            try {
+                val cachedJson = effectiveCacheFile.readText(Charsets.UTF_8)
+                val cachedItems = parseCatalogJson(cachedJson, downloadDir)
+                if (cachedItems.isNotEmpty()) {
+                    return Result.success(cachedItems)
+                }
+            } catch (t: Throwable) {
+                lastError = t
+                SafeProbeIo.warn(TAG, "Failed reading cached catalog file: ${t.message}", t)
+            }
+        }
+
+        return Result.failure(
+            IOException("索引获取失败，请检查网络或稍后重试", lastError)
+        )
+    }
+
+    private fun persistCatalogCache(rawJson: String, cacheFile: File?) {
+        try {
+            if (cacheFile == null) return
+            cacheFile.parentFile?.mkdirs()
+            val tmp = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+            tmp.writeText(rawJson, Charsets.UTF_8)
+            if (cacheFile.exists()) cacheFile.delete()
+            if (!tmp.renameTo(cacheFile)) {
+                tmp.copyTo(cacheFile, overwrite = true)
+                tmp.delete()
+            }
+        } catch (t: Throwable) {
+            SafeProbeIo.warn(TAG, "Failed persisting catalog cache: ${t.message}", t)
         }
     }
 
-    internal fun parseCatalogJson(rawJson: String, downloadDir: File?): List<DownloadCatalogItem> {
+    internal open fun parseCatalogJson(rawJson: String, downloadDir: File?): List<DownloadCatalogItem> {
         val trimmed = rawJson.trim()
         val array = if (trimmed.startsWith("[")) {
             JSONArray(trimmed)
@@ -113,7 +158,6 @@ open class RemoteCatalogFetcher(
             val isDownloaded = localFile != null && localFile.exists() && localFile.length() > 0L
             val status = when {
                 isDownloaded -> DownloadContentStatus.DOWNLOADED
-                downloadUrl.isBlank() -> DownloadContentStatus.DISABLED
                 else -> DownloadContentStatus.AVAILABLE
             }
             result += DownloadCatalogItem(
@@ -146,14 +190,31 @@ open class RemoteCatalogFetcher(
     companion object {
         private const val TAG = "RemoteCatalogFetcher"
         const val RAW_CATALOG_URL = "https://raw.githubusercontent.com/hazure/AICLauncher/nocheck_dev/catalog.json"
+        val CATALOG_CANDIDATE_URLS = listOf(
+            RAW_CATALOG_URL,
+            "https://cdn.jsdelivr.net/gh/hazure/AICLauncher@nocheck_dev/catalog.json"
+        )
+
+        fun resolveCatalogCacheFile(context: Context?): File? {
+            return context?.filesDir?.let { File(File(it, "catalog"), "catalog_cache.json") }
+        }
     }
+}
+
+enum class DownloadSourceChannel {
+    WEBVIEW_MAIN,
+    HTTP_FALLBACK,
+    CATALOG_FALLBACK
 }
 
 data class DownloadRequest(
     val itemId: String,
     val url: String,
     val destFile: File,
-    val expectedBytes: Long = 0L
+    val expectedBytes: Long = 0L,
+    val expectedSha256: String? = null,
+    val sourceChannel: DownloadSourceChannel = DownloadSourceChannel.HTTP_FALLBACK,
+    val reResolveUrl: (suspend () -> String?)? = null
 )
 
 interface DownloadProgressListener {
@@ -192,6 +253,12 @@ class DownloadQueueManager(
                     val partFile = File(request.destFile.parentFile, "${request.destFile.name}.part")
                     activePartFiles[request.itemId] = partFile
                     try {
+                        runCatching {
+                            Log.i(
+                                "AICL_PIPELINE",
+                                "phase=DOWNLOAD_START itemId=${request.itemId} sourceKind=${request.sourceChannel.name} fp=${GameSourceResolver.urlFingerprint(request.url)}"
+                            )
+                        }
                         listener?.onStarted(request.itemId)
                         streamDownloader(request, requireNotNull(listener))
                     } catch (e: CancellationException) {
@@ -263,62 +330,188 @@ class DownloadQueueManager(
                 throw IOException("无法创建下载目录：${parent.absolutePath}")
             }
             val partFile = File(parent, "${request.destFile.name}.part")
-            val conn = (URL(request.url).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 15_000
-                readTimeout = 20_000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", CHROME_USER_AGENT)
-            }
-            try {
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    throw IOException("HTTP $code")
-                }
-                val totalBytes = conn.contentLengthLong.takeIf { it > 0L } ?: request.expectedBytes
-                val buffer = ByteArray(BUFFER_SIZE)
-                var downloaded = 0L
-                var lastEmitTime = 0L
+            var currentUrl = request.url
+            var currentFp = GameSourceResolver.urlFingerprint(currentUrl)
+            var reResolvedOnce = false
+            var transientAttempt = 0
 
-                conn.inputStream.use { input ->
-                    FileOutputStream(partFile).use { output ->
-                        while (true) {
-                            coroutineContext.ensureActive()
-                            val read = input.read(buffer)
-                            if (read <= 0) break
-                            output.write(buffer, 0, read)
-                            downloaded += read
-                            val now = System.currentTimeMillis()
-                            if (now - lastEmitTime >= PROGRESS_EMIT_INTERVAL_MS) {
-                                lastEmitTime = now
-                                val percent = if (totalBytes > 0L) {
-                                    ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99)
-                                } else {
-                                    0
-                                }
-                                listener.onProgress(request.itemId, downloaded, totalBytes, percent)
-                            }
-                        }
+            while (true) {
+                coroutineContext.ensureActive()
+                val existingBytes = if (partFile.isFile) partFile.length() else 0L
+                val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 15_000
+                    readTimeout = 20_000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", CHROME_USER_AGENT)
+                    if (existingBytes > 0L) {
+                        setRequestProperty("Range", "bytes=$existingBytes-")
                     }
                 }
+                try {
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        val isResume = code == HttpURLConnection.HTTP_PARTIAL && existingBytes > 0L
+                        val contentLen = conn.contentLengthLong.takeIf { it > 0L } ?: 0L
+                        val totalBytes = if (isResume && contentLen > 0L) {
+                            existingBytes + contentLen
+                        } else if (contentLen > 0L) {
+                            contentLen
+                        } else {
+                            request.expectedBytes
+                        }
+                        val buffer = ByteArray(BUFFER_SIZE)
+                        var downloaded = if (isResume) existingBytes else 0L
+                        var lastEmitTime = 0L
 
-                if (request.destFile.exists()) {
-                    request.destFile.delete()
+                        conn.inputStream.use { input ->
+                            FileOutputStream(partFile, isResume).use { output ->
+                                while (true) {
+                                    coroutineContext.ensureActive()
+                                    val read = input.read(buffer)
+                                    if (read <= 0) break
+                                    output.write(buffer, 0, read)
+                                    downloaded += read
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastEmitTime >= PROGRESS_EMIT_INTERVAL_MS) {
+                                        lastEmitTime = now
+                                        val percent = if (totalBytes > 0L) {
+                                            ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99)
+                                        } else {
+                                            0
+                                        }
+                                        listener.onProgress(request.itemId, downloaded, totalBytes, percent)
+                                    }
+                                }
+                            }
+                        }
+
+                        verifyMagicAndFinalize(
+                            partFile = partFile,
+                            destFile = request.destFile,
+                            expectedSha256 = request.expectedSha256,
+                            fp = currentFp
+                        ).getOrThrow()
+                        listener.onProgress(request.itemId, downloaded, totalBytes.coerceAtLeast(downloaded), 100)
+                        listener.onCompleted(request.itemId, request.destFile)
+                        return
+                    }
+
+                    when (HttpErrorPolicy.classifyHttpCode(code)) {
+                        HttpErrorAction.RE_RESOLVE_LINK -> {
+                            if (!reResolvedOnce && request.reResolveUrl != null) {
+                                reResolvedOnce = true
+                                val refreshed = request.reResolveUrl.invoke()
+                                if (refreshed.isNullOrBlank()) {
+                                    throw IOException("LINK_UNRESOLVABLE: 重取直链为空")
+                                }
+                                val newFp = GameSourceResolver.urlFingerprint(refreshed)
+                                runCatching {
+                                    Log.i("AICL_PIPELINE", "DOWNLOADING http=$code action=RE_RESOLVE_LINK oldFp=$currentFp newFp=$newFp")
+                                }
+                                if (newFp == currentFp) {
+                                    throw IOException("LINK_UNRESOLVABLE: 取链未能刷新，可能短码失效或网络受限")
+                                }
+                                currentUrl = refreshed
+                                currentFp = newFp
+                                continue
+                            }
+                            throw IOException("LINK_EXPIRED: HTTP $code")
+                        }
+                        HttpErrorAction.RETRY_WITH_BACKOFF -> {
+                            if (transientAttempt < HttpErrorPolicy.MAX_TRANSIENT_RETRIES) {
+                                val delayMs = HttpErrorPolicy.BACKOFF_DELAYS_MS.getOrElse(transientAttempt) { 4_000L }
+                                transientAttempt++
+                                delay(delayMs)
+                                continue
+                            }
+                            throw IOException("DOWNLOAD_FAILED: HTTP $code")
+                        }
+                        HttpErrorAction.FAIL_FAST -> {
+                            throw IOException("DOWNLOAD_FAILED: HTTP $code")
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    if (partFile.exists()) partFile.delete()
+                    throw e
+                } catch (e: IOException) {
+                    if (e.message?.startsWith("LINK_EXPIRED") == true ||
+                        e.message?.startsWith("CHECKSUM_MISMATCH") == true ||
+                        e.message?.startsWith("DOWNLOAD_FAILED") == true
+                    ) {
+                        if (partFile.exists() && e.message?.startsWith("CHECKSUM_MISMATCH") == true) {
+                            partFile.delete()
+                        }
+                        throw e
+                    }
+                    if (HttpErrorPolicy.classifyException(e) == HttpErrorAction.RETRY_WITH_BACKOFF &&
+                        transientAttempt < HttpErrorPolicy.MAX_TRANSIENT_RETRIES
+                    ) {
+                        val delayMs = HttpErrorPolicy.BACKOFF_DELAYS_MS.getOrElse(transientAttempt) { 4_000L }
+                        transientAttempt++
+                        delay(delayMs)
+                        continue
+                    }
+                    throw e
+                } finally {
+                    conn.disconnect()
                 }
-                if (!partFile.renameTo(request.destFile)) {
-                    partFile.copyTo(request.destFile, overwrite = true)
-                    partFile.delete()
-                }
-                listener.onProgress(request.itemId, downloaded, totalBytes.coerceAtLeast(downloaded), 100)
-                listener.onCompleted(request.itemId, request.destFile)
-            } catch (e: Exception) {
-                if (partFile.exists()) {
-                    partFile.delete()
-                }
-                throw e
-            } finally {
-                conn.disconnect()
             }
+        }
+
+        fun verifyMagicAndFinalize(
+            partFile: File,
+            destFile: File,
+            expectedSha256: String?,
+            fp: String,
+            extractor: ArchiveExtractor = ArchiveExtractor()
+        ): Result<File> {
+            return runCatching {
+                val container = extractor.detectContainer(partFile)
+                runCatching {
+                    Log.i(
+                        "AICL_PIPELINE",
+                        "VERIFYING_MAGIC container=$container bytes=${partFile.length()} fp=$fp"
+                    )
+                }
+                if (container == ArchiveContainer.CF_CHALLENGE_HTML) {
+                    partFile.delete()
+                    throw IOException("CF_CHALLENGE_HTML: 命中 Cloudflare 挑战页，非压缩包文件")
+                }
+                if (container == ArchiveContainer.UNKNOWN) {
+                    partFile.delete()
+                    throw IOException("NOT_ARCHIVE: 下载产物非有效 7z/zip 压缩包")
+                }
+                if (!expectedSha256.isNullOrBlank()) {
+                    val actualSha = computeSha256(partFile)
+                    if (!actualSha.equals(expectedSha256, ignoreCase = true)) {
+                        partFile.delete()
+                        throw IOException("CHECKSUM_MISMATCH: 文件哈希校验失败")
+                    }
+                }
+                destFile.parentFile?.mkdirs()
+                if (destFile.exists()) {
+                    destFile.delete()
+                }
+                if (!partFile.renameTo(destFile)) {
+                    partFile.copyTo(destFile, overwrite = true)
+                    partFile.delete()
+                }
+                destFile
+            }
+        }
+
+        private fun computeSha256(file: File): String {
+            val md = MessageDigest.getInstance("SHA-256")
+            val buf = ByteArray(16 * 1024)
+            FileInputStream(file).use { input ->
+                while (true) {
+                    val read = input.read(buf)
+                    if (read <= 0) break
+                    md.update(buf, 0, read)
+                }
+            }
+            return md.digest().joinToString("") { "%02x".format(it) }
         }
     }
 }
