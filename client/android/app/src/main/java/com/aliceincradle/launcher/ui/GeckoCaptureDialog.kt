@@ -96,13 +96,34 @@ fun GeckoCaptureDialog(
 
     val runtime = remember(context) { GeckoRuntimeManager.getOrCreate(context) }
 
+    fun activateSession(session: GeckoSession, gv: GeckoView?) {
+        if (disposed.get()) return
+        try {
+            session.setActive(true)
+            session.setFocused(true)
+            runtime?.webExtensionController?.setTabActive(session, true)
+            gv?.let { view ->
+                view.isFocusable = true
+                view.isFocusableInTouchMode = true
+                if (!view.isFocused) {
+                    view.requestFocus()
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w("AICL_GECKO", "Failed activating GeckoSession", t)
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             val session = sessionHolder.ref ?: return@LifecycleEventObserver
             try {
                 when (event) {
-                    Lifecycle.Event.ON_RESUME -> session.setActive(true)
-                    Lifecycle.Event.ON_PAUSE -> session.setActive(false)
+                    Lifecycle.Event.ON_RESUME -> activateSession(session, viewHolder.ref)
+                    Lifecycle.Event.ON_PAUSE -> {
+                        session.setActive(false)
+                        runtime?.webExtensionController?.setTabActive(session, false)
+                    }
                     else -> Unit
                 }
             } catch (t: Throwable) {
@@ -119,6 +140,13 @@ fun GeckoCaptureDialog(
         onDispose {
             disposed.set(true)
             mainHandler.removeCallbacksAndMessages(null)
+            try {
+                sessionHolder.ref?.let { s ->
+                    runtime?.webExtensionController?.setTabActive(s, false)
+                }
+            } catch (t: Throwable) {
+                Log.w("AICL_GECKO", "Failed deactivating GeckoSession tab", t)
+            }
             try {
                 viewHolder.ref?.releaseSession()
             } catch (t: Throwable) {
@@ -191,6 +219,7 @@ fun GeckoCaptureDialog(
                     override fun onPageStart(session: GeckoSession, url: String) {
                         if (!disposed.get()) {
                             mainHandler.post {
+                                activateSession(session, viewHolder.ref)
                                 isLoading = true
                                 errorMessage = null
                             }
@@ -210,6 +239,7 @@ fun GeckoCaptureDialog(
                         perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
                         hasUserGesture: Boolean
                     ) {
+                        mainHandler.post { activateSession(session, viewHolder.ref) }
                         tryCaptureUrl(url)
                     }
 
@@ -279,6 +309,26 @@ fun GeckoCaptureDialog(
                 }
             }
             session.open(activeRuntime)
+            gv.setSession(session)
+            activateSession(session, gv)
+            sessionHolder.ref = session
+            viewHolder.ref = gv
+            val initialLoadTriggered = AtomicBoolean(false)
+            fun triggerInitialLoad() {
+                if (!initialLoadTriggered.compareAndSet(false, true) || disposed.get()) return
+                gv.post {
+                    if (!disposed.get()) {
+                        try {
+                            activateSession(session, gv)
+                            session.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
+                        } catch (t: Throwable) {
+                            Log.e("AICL_GECKO", "Failed loading initial GeckoSession URI", t)
+                            isLoading = false
+                            errorMessage = "页面加载启动失败，请重试或改用外部浏览器打开"
+                        }
+                    }
+                }
+            }
             GeckoRuntimeManager.ensureDiagnosticExtension(activeRuntime) { ext ->
                 try {
                     session.webExtensionController.setMessageDelegate(
@@ -305,23 +355,11 @@ fun GeckoCaptureDialog(
                     )
                 } catch (t: Throwable) {
                     Log.w("AICL_GECKO", "Failed binding diagnostic MessageDelegate", t)
+                } finally {
+                    triggerInitialLoad()
                 }
             }
-            gv.setSession(session)
-            session.setActive(true)
-            sessionHolder.ref = session
-            viewHolder.ref = gv
-            gv.post {
-                if (!disposed.get()) {
-                    try {
-                        session.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
-                    } catch (t: Throwable) {
-                        Log.e("AICL_GECKO", "Failed loading initial GeckoSession URI", t)
-                        isLoading = false
-                        errorMessage = "页面加载启动失败，请重试或改用外部浏览器打开"
-                    }
-                }
-            }
+            mainHandler.postDelayed({ triggerInitialLoad() }, 400L)
         } catch (t: Throwable) {
             Log.e("AICL_GECKO", "Failed creating GeckoSession", t)
             mainHandler.post {
@@ -431,6 +469,8 @@ fun GeckoCaptureDialog(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.MATCH_PARENT
                                 )
+                                isFocusable = true
+                                isFocusableInTouchMode = true
                             }
                             viewHolder.ref = gv
                             val layoutListener = object : View.OnLayoutChangeListener {
@@ -486,7 +526,7 @@ fun GeckoCaptureDialog(
                                 isLoading = true
                                 val existingSession = sessionHolder.ref
                                 if (existingSession != null) {
-                                    existingSession.setActive(true)
+                                    activateSession(existingSession, viewHolder.ref)
                                     existingSession.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
                                 } else {
                                     viewHolder.ref?.let { startSessionIfReady(it) }

@@ -9,6 +9,7 @@
   },
   "permissions": [
     "nativeMessaging",
+    "nativeMessagingFromContent",
     "geckoViewAddons",
     "https://get.aliceincradle.dev/*"
   ],

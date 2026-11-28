@@ -15,8 +15,44 @@
     send(
       "diag_env",
       location.href,
-      "ua=" + navigator.userAgent + " vp=" + window.innerWidth + "x" + window.innerHeight + " dpr=" + window.devicePixelRatio
+      "vis=" + document.visibilityState +
+        " hidden=" + document.hidden +
+        " focus=" + document.hasFocus() +
+        " vp=" + window.innerWidth + "x" + window.innerHeight +
+        " dpr=" + window.devicePixelRatio
     );
+  } catch (_) {}
+
+  try {
+    document.addEventListener("visibilitychange", function () {
+      send(
+        "vis_change",
+        location.href,
+        "vis=" + document.visibilityState + " hidden=" + document.hidden + " focus=" + document.hasFocus()
+      );
+    });
+  } catch (_) {}
+
+  try {
+    var rafFired = false;
+    var t0 = Date.now();
+    requestAnimationFrame(function () {
+      rafFired = true;
+      send(
+        "raf_ok",
+        location.href,
+        "ms=" + (Date.now() - t0) + " vis=" + document.visibilityState + " hidden=" + document.hidden
+      );
+    });
+    setTimeout(function () {
+      if (!rafFired) {
+        send(
+          "raf_stalled",
+          location.href,
+          "after=1500ms vis=" + document.visibilityState + " hidden=" + document.hidden + " focus=" + document.hasFocus()
+        );
+      }
+    }, 1500);
   } catch (_) {}
 
   window.addEventListener(
