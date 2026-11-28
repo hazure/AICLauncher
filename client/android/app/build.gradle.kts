@@ -12,8 +12,8 @@ android {
         applicationId = "com.aliceincradle.launcher"
         minSdk = 24
         targetSdk = 34
-        versionCode = 23
-        versionName = "0.1.2g"
+        versionCode = 24
+        versionName = "0.1.2h"
     }
 
     buildTypes {
