@@ -12,11 +12,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -34,7 +31,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -46,14 +42,12 @@ import com.aliceincradle.launcher.bridge.GeckoRuntimeManager
 import com.aliceincradle.launcher.bridge.GeckoRuntimeStatus
 import com.aliceincradle.launcher.bridge.ShortCodeRelayExtractor
 import java.util.concurrent.atomic.AtomicBoolean
-import org.json.JSONObject
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
-import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 
@@ -80,20 +74,6 @@ fun GeckoCaptureDialog(
     var progress by remember { mutableStateOf(0) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var diagnosticLines by remember { mutableStateOf<List<String>>(emptyList()) }
-    var useDesktopUaOverride by remember { mutableStateOf(true) }
-
-    fun appendDiagnostic(line: String) {
-        Log.w("AICL_GECKO", "DIAG $line")
-        if (disposed.get()) return
-        mainHandler.post {
-            if (!disposed.get()) {
-                if (diagnosticLines.lastOrNull() != line) {
-                    diagnosticLines = (diagnosticLines + line).takeLast(12)
-                }
-            }
-        }
-    }
 
     val runtime = remember(context) { GeckoRuntimeManager.getOrCreate(context) }
 
@@ -112,31 +92,6 @@ fun GeckoCaptureDialog(
             }
         } catch (t: Throwable) {
             Log.w("AICL_GECKO", "Failed activating GeckoSession", t)
-        }
-    }
-
-    fun applyUaModeAndReload(session: GeckoSession, desktopOverride: Boolean) {
-        try {
-            if (desktopOverride) {
-                val desktopUa = GeckoDesktopIdentity.buildDesktopFirefoxUserAgent()
-                session.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
-                session.settings.viewportMode = GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
-                session.settings.userAgentOverride = desktopUa
-            } else {
-                session.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_MOBILE
-                session.settings.viewportMode = GeckoSessionSettings.VIEWPORT_MODE_MOBILE
-                session.settings.userAgentOverride = null
-            }
-            diagnosticLines = emptyList()
-            errorMessage = null
-            isLoading = true
-            appendDiagnostic("[ua_mode] desktopOverride=$desktopOverride")
-            activateSession(session, viewHolder.ref)
-            session.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
-        } catch (t: Throwable) {
-            Log.e("AICL_GECKO", "Failed switching GeckoSession UA mode", t)
-            errorMessage = "切换 UA 失败，请重试"
-            isLoading = false
         }
     }
 
@@ -232,7 +187,6 @@ fun GeckoCaptureDialog(
                             "AICL_GECKO",
                             "onContentBlocked uri=${event.uri} antiTracking=${event.antiTrackingCategory}"
                         )
-                        appendDiagnostic("[blocked] ${event.uri} | cat=${event.antiTrackingCategory}")
                     }
                 }
                 progressDelegate = object : GeckoSession.ProgressDelegate {
@@ -291,7 +245,6 @@ fun GeckoCaptureDialog(
                             "AICL_GECKO",
                             "onLoadError uri=$uri category=${error.category} code=${error.code}"
                         )
-                        appendDiagnostic("[load_err] ${uri.orEmpty()} | cat=${error.category} code=${error.code}")
                         if (!disposed.get()) {
                             mainHandler.post {
                                 isLoading = false
@@ -355,37 +308,10 @@ fun GeckoCaptureDialog(
                     }
                 }
             }
-            GeckoRuntimeManager.ensureDiagnosticExtension(activeRuntime) { ext ->
-                try {
-                    session.webExtensionController.setMessageDelegate(
-                        ext,
-                        object : WebExtension.MessageDelegate {
-                            override fun onMessage(
-                                nativeApp: String,
-                                message: Any,
-                                sender: WebExtension.MessageSender
-                            ): GeckoResult<Any>? {
-                                try {
-                                    val json = message as? JSONObject ?: return null
-                                    val kind = json.optString("kind", "diag")
-                                    val url = json.optString("url", "")
-                                    val detail = json.optString("detail", "")
-                                    appendDiagnostic("[$kind] $url | $detail")
-                                } catch (t: Throwable) {
-                                    Log.w("AICL_GECKO", "Failed parsing diagnostic message", t)
-                                }
-                                return null
-                            }
-                        },
-                        "aicl_diag"
-                    )
-                } catch (t: Throwable) {
-                    Log.w("AICL_GECKO", "Failed binding diagnostic MessageDelegate", t)
-                } finally {
-                    triggerInitialLoad()
-                }
+            GeckoRuntimeManager.ensureSvgCompatExtension(activeRuntime) {
+                triggerInitialLoad()
             }
-            mainHandler.postDelayed({ triggerInitialLoad() }, 400L)
+            mainHandler.postDelayed({ triggerInitialLoad() }, 500L)
         } catch (t: Throwable) {
             Log.e("AICL_GECKO", "Failed creating GeckoSession", t)
             mainHandler.post {
@@ -415,23 +341,8 @@ fun GeckoCaptureDialog(
                     text = "应用内下载验证（Gecko）",
                     style = MaterialTheme.typography.titleMedium
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(
-                        onClick = {
-                            val next = !useDesktopUaOverride
-                            useDesktopUaOverride = next
-                            sessionHolder.ref?.let { applyUaModeAndReload(it, next) }
-                        }
-                    ) {
-                        Text(
-                            text = if (useDesktopUaOverride) "切原生UA" else "切桌面UA",
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text(text = "取消", maxLines = 1, softWrap = false)
-                    }
+                TextButton(onClick = onDismiss) {
+                    Text(text = "取消", maxLines = 1, softWrap = false)
                 }
             }
             Text(
@@ -443,32 +354,6 @@ fun GeckoCaptureDialog(
                 progress = { (progress / 100f).coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth()
             )
-            if (diagnosticLines.isNotEmpty()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.small,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 140.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                            .padding(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        diagnosticLines.forEach { line ->
-                            Text(
-                                text = line,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
 
             if (runtime == null || runtimeState.status == GeckoRuntimeStatus.FAILED) {
                 Box(
@@ -563,7 +448,6 @@ fun GeckoCaptureDialog(
                         onClick = {
                             try {
                                 errorMessage = null
-                                diagnosticLines = emptyList()
                                 isLoading = true
                                 val existingSession = sessionHolder.ref
                                 if (existingSession != null) {

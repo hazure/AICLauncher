@@ -33,7 +33,7 @@ object GeckoRuntimeManager {
     private var runtime: GeckoRuntime? = null
 
     @Volatile
-    private var diagnosticExtension: WebExtension? = null
+    private var svgCompatExtension: WebExtension? = null
 
     private val _state = MutableStateFlow(GeckoRuntimeState())
     val state: StateFlow<GeckoRuntimeState> = _state.asStateFlow()
@@ -64,6 +64,7 @@ object GeckoRuntimeManager {
                 runtime = created
                 _state.value = GeckoRuntimeState(status = GeckoRuntimeStatus.READY)
                 Log.i(TAG, "GeckoRuntime initialized (Desktop Firefox ${GeckoDesktopIdentity.GECKO_MAJOR_VERSION})")
+                ensureSvgCompatExtension(created) {}
                 created
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to initialize GeckoRuntime", t)
@@ -76,33 +77,35 @@ object GeckoRuntimeManager {
         }
     }
 
-    fun ensureDiagnosticExtension(
+    fun ensureSvgCompatExtension(
         runtime: GeckoRuntime,
-        onReady: (WebExtension) -> Unit
+        onReady: () -> Unit
     ) {
-        diagnosticExtension?.let {
-            onReady(it)
+        if (svgCompatExtension != null) {
+            onReady()
             return
         }
         try {
             runtime.webExtensionController
                 .ensureBuiltIn(
-                    "resource://android/assets/extensions/aicl_diag/",
-                    "aicl-diag@aliceincradle.launcher"
+                    "resource://android/assets/extensions/aicl_svg_fix/",
+                    "aicl-svg-fix@aliceincradle.launcher"
                 )
                 .accept(
                     { ext ->
                         if (ext != null) {
-                            diagnosticExtension = ext
-                            onReady(ext)
+                            svgCompatExtension = ext
                         }
+                        onReady()
                     },
                     { err ->
-                        Log.w(TAG, "Failed installing diagnostic WebExtension", err)
+                        Log.w(TAG, "Failed installing SVG compat WebExtension", err)
+                        onReady()
                     }
                 )
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed ensuring diagnostic WebExtension", t)
+            Log.w(TAG, "Failed ensuring SVG compat WebExtension", t)
+            onReady()
         }
     }
 }
