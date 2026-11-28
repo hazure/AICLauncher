@@ -1,0 +1,23 @@
+{
+  "manifest_version": 2,
+  "name": "AICL Gecko Diagnostics",
+  "version": "1.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "aicl-diag@aliceincradle.launcher"
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "geckoViewAddons",
+    "https://get.aliceincradle.dev/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://get.aliceincradle.dev/*"],
+      "js": ["diag.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}

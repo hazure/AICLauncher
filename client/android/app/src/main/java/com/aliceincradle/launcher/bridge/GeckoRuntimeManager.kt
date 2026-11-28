@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
+import org.mozilla.geckoview.WebExtension
 
 enum class GeckoRuntimeStatus {
     IDLE,
@@ -31,6 +32,9 @@ object GeckoRuntimeManager {
     @Volatile
     private var runtime: GeckoRuntime? = null
 
+    @Volatile
+    private var diagnosticExtension: WebExtension? = null
+
     private val _state = MutableStateFlow(GeckoRuntimeState())
     val state: StateFlow<GeckoRuntimeState> = _state.asStateFlow()
 
@@ -52,6 +56,8 @@ object GeckoRuntimeManager {
                     .allowInsecureConnections(GeckoRuntimeSettings.ALLOW_ALL)
                     .consoleOutput(true)
                     .automaticFontSizeAdjustment(false)
+                    .enterpriseRootsEnabled(true)
+                    .webFontsEnabled(true)
                     .locales(arrayOf("en-US", "zh-CN"))
                     .build()
                 val created = GeckoRuntime.create(context.applicationContext, settings)
@@ -67,6 +73,36 @@ object GeckoRuntimeManager {
                 )
                 null
             }
+        }
+    }
+
+    fun ensureDiagnosticExtension(
+        runtime: GeckoRuntime,
+        onReady: (WebExtension) -> Unit
+    ) {
+        diagnosticExtension?.let {
+            onReady(it)
+            return
+        }
+        try {
+            runtime.webExtensionController
+                .ensureBuiltIn(
+                    "resource://android/assets/extensions/aicl_diag/",
+                    "aicl-diag@aliceincradle.launcher"
+                )
+                .accept(
+                    { ext ->
+                        if (ext != null) {
+                            diagnosticExtension = ext
+                            onReady(ext)
+                        }
+                    },
+                    { err ->
+                        Log.w(TAG, "Failed installing diagnostic WebExtension", err)
+                    }
+                )
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed ensuring diagnostic WebExtension", t)
         }
     }
 }

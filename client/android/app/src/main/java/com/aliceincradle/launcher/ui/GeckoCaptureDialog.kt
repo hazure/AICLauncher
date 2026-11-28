@@ -12,8 +12,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -31,6 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -41,12 +46,14 @@ import com.aliceincradle.launcher.bridge.GeckoRuntimeManager
 import com.aliceincradle.launcher.bridge.GeckoRuntimeStatus
 import com.aliceincradle.launcher.bridge.ShortCodeRelayExtractor
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONObject
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 
@@ -73,6 +80,19 @@ fun GeckoCaptureDialog(
     var progress by remember { mutableStateOf(0) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var diagnosticLines by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    fun appendDiagnostic(line: String) {
+        Log.w("AICL_GECKO", "DIAG $line")
+        if (disposed.get()) return
+        mainHandler.post {
+            if (!disposed.get()) {
+                if (diagnosticLines.lastOrNull() != line) {
+                    diagnosticLines = (diagnosticLines + line).takeLast(8)
+                }
+            }
+        }
+    }
 
     val runtime = remember(context) { GeckoRuntimeManager.getOrCreate(context) }
 
@@ -158,6 +178,7 @@ fun GeckoCaptureDialog(
                             "AICL_GECKO",
                             "onContentBlocked uri=${event.uri} antiTracking=${event.antiTrackingCategory}"
                         )
+                        appendDiagnostic("[blocked] ${event.uri} | cat=${event.antiTrackingCategory}")
                     }
                 }
                 progressDelegate = object : GeckoSession.ProgressDelegate {
@@ -214,6 +235,7 @@ fun GeckoCaptureDialog(
                             "AICL_GECKO",
                             "onLoadError uri=$uri category=${error.category} code=${error.code}"
                         )
+                        appendDiagnostic("[load_err] ${uri.orEmpty()} | cat=${error.category} code=${error.code}")
                         if (!disposed.get()) {
                             mainHandler.post {
                                 isLoading = false
@@ -257,6 +279,34 @@ fun GeckoCaptureDialog(
                 }
             }
             session.open(activeRuntime)
+            GeckoRuntimeManager.ensureDiagnosticExtension(activeRuntime) { ext ->
+                try {
+                    session.webExtensionController.setMessageDelegate(
+                        ext,
+                        object : WebExtension.MessageDelegate {
+                            override fun onMessage(
+                                nativeApp: String,
+                                message: Any,
+                                sender: WebExtension.MessageSender
+                            ): GeckoResult<Any>? {
+                                try {
+                                    val json = message as? JSONObject ?: return null
+                                    val kind = json.optString("kind", "diag")
+                                    val url = json.optString("url", "")
+                                    val detail = json.optString("detail", "")
+                                    appendDiagnostic("[$kind] $url | $detail")
+                                } catch (t: Throwable) {
+                                    Log.w("AICL_GECKO", "Failed parsing diagnostic message", t)
+                                }
+                                return null
+                            }
+                        },
+                        "aicl_diag"
+                    )
+                } catch (t: Throwable) {
+                    Log.w("AICL_GECKO", "Failed binding diagnostic MessageDelegate", t)
+                }
+            }
             gv.setSession(session)
             session.setActive(true)
             sessionHolder.ref = session
@@ -314,6 +364,32 @@ fun GeckoCaptureDialog(
                 progress = { (progress / 100f).coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth()
             )
+            if (diagnosticLines.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 110.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        diagnosticLines.forEach { line ->
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
 
             if (runtime == null || runtimeState.status == GeckoRuntimeStatus.FAILED) {
                 Box(
@@ -394,36 +470,64 @@ fun GeckoCaptureDialog(
                 }
             }
 
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                OutlinedButton(
-                    onClick = {
-                        try {
-                            errorMessage = null
-                            isLoading = true
-                            val existingSession = sessionHolder.ref
-                            if (existingSession != null) {
-                                existingSession.setActive(true)
-                                existingSession.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
-                            } else {
-                                viewHolder.ref?.let { startSessionIfReady(it) }
-                            }
-                        } catch (t: Throwable) {
-                            Log.e("AICL_GECKO", "Failed retrying GeckoSession loadUri", t)
-                            errorMessage = "重试失败，请改用外部浏览器打开"
-                            isLoading = false
-                        }
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(text = "重试")
+                    OutlinedButton(
+                        onClick = {
+                            try {
+                                errorMessage = null
+                                diagnosticLines = emptyList()
+                                isLoading = true
+                                val existingSession = sessionHolder.ref
+                                if (existingSession != null) {
+                                    existingSession.setActive(true)
+                                    existingSession.loadUri(GameSourceResolver.OFFICIAL_WIN_URL)
+                                } else {
+                                    viewHolder.ref?.let { startSessionIfReady(it) }
+                                }
+                            } catch (t: Throwable) {
+                                Log.e("AICL_GECKO", "Failed retrying GeckoSession loadUri", t)
+                                errorMessage = "重试失败，请改用外部浏览器打开"
+                                isLoading = false
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = "重试",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onFallbackManual,
+                        modifier = Modifier.weight(1.4f)
+                    ) {
+                        Text(
+                            text = "手动填入短码",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
-                OutlinedButton(onClick = onFallbackExternalRelay) {
-                    Text(text = "改用外部浏览器打开")
-                }
-                OutlinedButton(onClick = onFallbackManual) {
-                    Text(text = "手动填入短码")
+                OutlinedButton(
+                    onClick = onFallbackExternalRelay,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "改用外部浏览器打开",
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
