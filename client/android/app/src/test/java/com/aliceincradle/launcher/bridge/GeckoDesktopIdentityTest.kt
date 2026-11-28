@@ -8,21 +8,26 @@ import org.junit.Test
 
 class GeckoDesktopIdentityTest {
     @Test
-    fun nativeFirefoxAndroidIdentity_usesNoOverride_andRejectsDesktopOrChrome() {
+    fun nativeGeckoDesktopMode_usesNoOverride_andRejectsAndroidChromeOrWindowsSpoof() {
         assertNull(GeckoDesktopIdentity.USE_NATIVE_USER_AGENT_OVERRIDE)
         assertTrue(
-            GeckoDesktopIdentity.isValidNativeFirefoxAndroidUa(
-                "Mozilla/5.0 (Android 13; Mobile; rv:133.0) Gecko/133.0 Firefox/133.0"
+            GeckoDesktopIdentity.isValidNativeGeckoDesktopUa(
+                "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
             )
         )
         assertFalse(
-            GeckoDesktopIdentity.isValidNativeFirefoxAndroidUa(
+            GeckoDesktopIdentity.isValidNativeGeckoDesktopUa(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
             )
         )
         assertFalse(
-            GeckoDesktopIdentity.isValidNativeFirefoxAndroidUa(
-                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+            GeckoDesktopIdentity.isValidNativeGeckoDesktopUa(
+                "Mozilla/5.0 (Android 13; Mobile; rv:133.0) Gecko/133.0 Firefox/133.0"
+            )
+        )
+        assertFalse(
+            GeckoDesktopIdentity.isValidNativeGeckoDesktopUa(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
             )
         )
     }

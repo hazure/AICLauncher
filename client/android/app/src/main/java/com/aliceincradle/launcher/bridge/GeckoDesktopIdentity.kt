@@ -49,6 +49,15 @@ object GeckoDesktopIdentity {
         return FORBIDDEN_NATIVE_UA_TOKENS.none { token -> lower.contains(token) }
     }
 
+    fun isValidNativeGeckoDesktopUa(ua: String): Boolean {
+        val lower = ua.lowercase()
+        if (!ua.contains("Firefox/") || !ua.contains("Gecko/20100101") || !ua.contains("X11; Linux x86_64")) {
+            return false
+        }
+        val forbidden = FORBIDDEN_UA_TOKENS + "windows nt"
+        return forbidden.none { token -> lower.contains(token) }
+    }
+
     fun shouldInterceptAsShortCode(url: String?): Boolean {
         val candidate = url?.trim().orEmpty()
         if (candidate.isEmpty()) return false
