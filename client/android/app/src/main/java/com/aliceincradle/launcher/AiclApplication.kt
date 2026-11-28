@@ -1,15 +1,14 @@
 package com.aliceincradle.launcher
 
 import android.app.Application
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.tencent.smtt.sdk.QbSdk
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import com.tencent.smtt.sdk.TbsPrivacyAccess
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 
 enum class X5InitStatus {
     PENDING,
@@ -27,12 +26,11 @@ object X5EngineState {
 }
 
 class AiclApplication : Application() {
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     override fun onCreate() {
         super.onCreate()
-        appScope.launch {
+        Handler(Looper.getMainLooper()).post {
             try {
+                runCatching { TbsPrivacyAccess.disableSensitiveApi() }
                 runCatching { QbSdk.setDownloadWithoutWifi(true) }
                 QbSdk.initX5Environment(
                     applicationContext,
@@ -56,8 +54,8 @@ class AiclApplication : Application() {
                         }
                     }
                 )
-            } catch (e: Exception) {
-                Log.e("AICL_X5", "Failed to initialize X5 environment", e)
+            } catch (t: Throwable) {
+                Log.e("AICL_X5", "X5 init crashed, forcing system WebView fallback", t)
                 X5EngineState.update(X5InitStatus.FALLBACK_SYSTEM)
             }
         }
